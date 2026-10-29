@@ -1,0 +1,1423 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tribunal Laboral Burocrático de Durango - Control de Expedientes Ponencia 3</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- FIREBASE SDKs PARA CONEXIÓN MULTI-USUARIO EN LA NUBE -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, doc, setDoc, getDocs, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // CONFIGURACIÓN OFICIAL DE FIREBASE PONENCIA-TRES
+        const firebaseConfig = {
+            apiKey: "AIzaSyDQ2DGf9ciVHyCtQsyIomIL4W9vuvpzvzI",
+            authDomain: "ponencia-tres.firebaseapp.com",
+            projectId: "ponencia-tres",
+            storageBucket: "ponencia-tres.firebasestorage.app",
+            messagingSenderId: "681670104943",
+            appId: "1:681670104943:web:9921ec8d2286b10c15fa9a",
+            measurementId: "G-60XL844Q8F"
+        };
+
+        // Inicializar Firebase
+        try {
+            const appFB = initializeApp(firebaseConfig);
+            window.db = getFirestore(appFB);
+            window.isFirebaseConfigured = true;
+            console.log("Firebase 'ponencia-tres' conectado exitosamente para sincronización remota.");
+        } catch (e) {
+            window.isFirebaseConfigured = false;
+            console.warn("Error al conectar Firebase. Operando en modo memoria/local.", e);
+        }
+    </script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        durango: {
+                            silver: '#e2e8f0',
+                            platino: '#f8fafc',
+                            burgundy: '#800020',
+                            gold: '#c5a059',
+                            dark: '#0f172a',
+                            slate: '#334155'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        serif: ['Cinzel', 'serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .silver-gradient {
+            background: linear-gradient(135deg, #1e293b 0%, #334155 50%, #475569 100%);
+        }
+        .platino-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(8px);
+        }
+        .legal-seal {
+            border: 2px solid #c5a059;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans min-h-screen flex flex-col antialiased selection:bg-amber-500 selection:text-white">
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+    <!-- Modal Container -->
+    <div id="modal-container" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-40 hidden flex items-center justify-center p-4">
+        <div id="modal-content" class="bg-white rounded-xl shadow-2xl max-w-2xl w-full border border-slate-200 overflow-hidden transform transition-all max-h-[90vh] flex flex-col"></div>
+    </div>
+
+    <!-- MAIN APP WRAPPER -->
+    <div id="app" class="flex-1 flex flex-col min-h-screen"></div>
+
+    <script>
+        // GLOBAL INITIAL DATA & STORAGE LOGIC
+        const AREAS = [
+            'Oficialía',
+            'Secretaría de Acuerdos',
+            'Secretaría de Acuerdos de Autos / Inicio',
+            'Secretaría de Acuerdos de Trámite',
+            'Secretaría de Acuerdos de Proyectos',
+            'Actuaría',
+            'Amparo Indirecto',
+            'Amparo Directo',
+            'Oficina del Juez',
+            'Archivo'
+        ];
+
+        const ROLES = [
+            { id: 'Juez', name: 'Juez Supervisor' },
+            { id: 'Secretaria_Acuerdos', name: 'Secretaria de Acuerdos' },
+            { id: 'Oficial', name: 'Oficial Judicial' },
+            { id: 'Proyectista', name: 'Secretario de Proyectos' },
+            { id: 'Actuario', name: 'Actuario Notificador' },
+            { id: 'Encargado_Amparo', name: 'Encargado de Área de Amparo' },
+            { id: 'Archivista', name: 'Encargado de Archivo' },
+            { id: 'Administrador', name: 'Administrador General' }
+        ];
+
+        const DEFAULT_USERS = [
+            { id: 'u1', name: 'Mtro. Juez Ponencia 3', email: 'juez3@tribunallaboraldurango.gob.mx', username: 'Juez3', password: '123', area: 'Oficina del Juez', role: 'Juez', status: 'Activo', fechaAlta: '2026-01-10', docNombramiento: 'Nombramiento_Oficial.pdf', docINE: 'INE_Juez.pdf', acuerdoAceptado: true, permissions: { canRegister: true, canTurnar: true, canRecibir: true, canDelete: true, canViewAudit: true } },
+            { id: 'u2', name: 'Admin General', email: 'admin@tribunallaboraldurango.gob.mx', username: 'Admin', password: '662666', area: 'Oficina del Juez', role: 'Administrador', status: 'Activo', fechaAlta: '2026-01-01', docNombramiento: 'Nombramiento_Admin.pdf', docINE: 'INE_Admin.pdf', acuerdoAceptado: true, permissions: { canRegister: true, canTurnar: true, canRecibir: true, canDelete: true, canViewAudit: true } },
+            { id: 'u3', name: 'Lic. María Elena Torres', email: 'acuerdos@tribunallaboraldurango.gob.mx', username: 'SecretariaAcuerdos', password: '123', area: 'Secretaría de Acuerdos', role: 'Secretaria_Acuerdos', status: 'Activo', fechaAlta: '2026-01-12', docNombramiento: 'Nombramiento_Acuerdos.pdf', docINE: 'INE_Acuerdos.pdf', acuerdoAceptado: true, permissions: { canRegister: true, canTurnar: true, canRecibir: true, canDelete: false, canViewAudit: false } },
+            { id: 'u4', name: 'Lic. Roberto Gómez', email: 'actuaria@tribunallaboraldurango.gob.mx', username: 'Actuario1', password: '123', area: 'Actuaría', role: 'Actuario', status: 'Activo', fechaAlta: '2026-01-15', docNombramiento: 'Nombramiento_Actuario.pdf', docINE: 'INE_Actuario.pdf', acuerdoAceptado: true, permissions: { canRegister: false, canTurnar: true, canRecibir: true, canDelete: false, canViewAudit: false } }
+        ];
+
+        const DEFAULT_EXPEDIENTES = [
+            {
+                id: 'exp-001',
+                numero: '124/2026-P3',
+                juicio: 'Ordinario Laboral Burocrático',
+                actor: 'Juan Carlos Morales',
+                demandado: 'Secretaría de Educación del Estado de Durango',
+                areaActual: 'Secretaría de Acuerdos',
+                estadoRecepcion: 'Aceptado',
+                fechaTurno: '2026-03-01 09:30',
+                tareaPendiente: 'Revisión e integración de promoción inicial',
+                historial: [
+                    { fecha: '2026-03-01 09:00', usuario: 'Lic. María Elena Torres', area: 'Oficialía', accion: 'Radicación de Expediente e ingreso de promoción inicial.' },
+                    { fecha: '2026-03-01 09:30', usuario: 'Lic. María Elena Torres', area: 'Secretaría de Acuerdos', accion: 'Aceptación física e inicio de trámite.' }
+                ]
+            }
+        ];
+
+        const DEFAULT_AUDIT_LOGS = [
+            {
+                id: 'log-001',
+                fecha: '2026-03-01 09:00',
+                usuario: 'Sistema',
+                accion: 'Carga inicial del sistema y configuración de la Ponencia.',
+                area: 'Oficina del Juez'
+            }
+        ];
+
+        // LOCAL STORAGE LOADERS
+        let users = JSON.parse(localStorage.getItem('tld_users')) || DEFAULT_USERS;
+        let expedientes = JSON.parse(localStorage.getItem('tld_expedientes')) || DEFAULT_EXPEDIENTES;
+        let auditLogs = JSON.parse(localStorage.getItem('tld_audit_logs')) || DEFAULT_AUDIT_LOGS;
+        let currentUser = JSON.parse(localStorage.getItem('tld_current_user')) || null;
+
+        // GARANTIZAR QUE SIEMPRE EXISTAN Y ESTÉN ACTIVOS LOS USUARIOS BASE
+        function ensureDefaultUsers() {
+            if (!Array.isArray(users) || users.length === 0) {
+                users = JSON.parse(JSON.stringify(DEFAULT_USERS));
+            } else {
+                DEFAULT_USERS.forEach(defaultUser => {
+                    const idx = users.findIndex(u => u && u.username && u.username.toLowerCase() === defaultUser.username.toLowerCase());
+                    if (idx === -1) {
+                        users.push(JSON.parse(JSON.stringify(defaultUser)));
+                    } else {
+                        users[idx].status = 'Activo';
+                        users[idx].password = defaultUser.password;
+                    }
+                });
+            }
+            // Asignar permisos por defecto si no existen
+            users.forEach(u => {
+                if (!u.permissions) {
+                    if (u.role === 'Juez' || u.role === 'Administrador') {
+                        u.permissions = { canRegister: true, canTurnar: true, canRecibir: true, canDelete: true, canViewAudit: true };
+                    } else if (u.role === 'Oficial') {
+                        u.permissions = { canRegister: true, canTurnar: true, canRecibir: true, canDelete: false, canViewAudit: false };
+                    } else {
+                        u.permissions = { canRegister: false, canTurnar: true, canRecibir: true, canDelete: false, canViewAudit: false };
+                    }
+                }
+            });
+            saveState();
+        }
+        ensureDefaultUsers();
+
+        function saveState() {
+            localStorage.setItem('tld_users', JSON.stringify(users));
+            localStorage.setItem('tld_expedientes', JSON.stringify(expedientes));
+            localStorage.setItem('tld_audit_logs', JSON.stringify(auditLogs));
+            localStorage.setItem('tld_current_user', JSON.stringify(currentUser));
+        }
+
+        // UNEDITABLE AUDIT LOGGER
+        function logAction(actionDescription) {
+            const newLog = {
+                id: 'log-' + Date.now(),
+                fecha: new Date().toLocaleString('es-MX'),
+                usuario: currentUser ? `${currentUser.name} (${currentUser.username})` : 'Sistema / Anónimo',
+                accion: actionDescription,
+                area: currentUser ? currentUser.area : 'N/A'
+            };
+            auditLogs.unshift(newLog);
+            saveState();
+
+            // Sincronización en la nube si Firebase está activo
+            if (window.isFirebaseConfigured && window.db) {
+                try {
+                    import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ doc, setDoc }) => {
+                        setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'audit_logs', newLog.id), newLog);
+                    });
+                } catch(err) { console.error("Error sincronizando log en Firebase:", err); }
+            }
+        }
+
+        // CÁLCULO DE DÍAS HÁBILES TRANSCURRIDOS (EXCLUYE SÁBADOS Y DOMINGOS)
+        function calcularDiasHabilesTranscurridos(fechaTurnoStr) {
+            if (!fechaTurnoStr) return { dias: 0, estado: 'verde', label: '0 días hábiles' };
+
+            let fechaInicio;
+            try {
+                // Parse format "YYYY-MM-DD HH:MM" or "DD/MM/YYYY HH:MM"
+                const parts = fechaTurnoStr.split(' ');
+                const dateParts = parts[0].includes('/') ? parts[0].split('/') : parts[0].split('-');
+                if (dateParts[0].length === 4) {
+                    fechaInicio = new Date(`${dateParts[0]}-${dateParts[1]}-${dateParts[2]}T${parts[1] || '08:00'}`);
+                } else {
+                    fechaInicio = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${parts[1] || '08:00'}`);
+                }
+            } catch (err) {
+                fechaInicio = new Date();
+            }
+
+            if (isNaN(fechaInicio.getTime())) fechaInicio = new Date();
+
+            const hoy = new Date();
+            let diasHabiles = 0;
+            let tempDate = new Date(fechaInicio);
+
+            // Set times to midnight for clean day comparisons
+            tempDate.setHours(0, 0, 0, 0);
+            const hoyMidnight = new Date(hoy);
+            hoyMidnight.setHours(0, 0, 0, 0);
+
+            while (tempDate < hoyMidnight) {
+                tempDate.setDate(tempDate.getDate() + 1);
+                const dayOfWeek = tempDate.getDay();
+                if (dayOfWeek !== 0 && dayOfWeek !== 6) { // 0 = Domingo, 6 = Sábado
+                    diasHabiles++;
+                }
+            }
+
+            let estado = 'verde';
+            let bgClass = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+            let icon = 'check-circle';
+
+            if (diasHabiles === 2) {
+                estado = 'amarillo';
+                bgClass = 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse';
+                icon = 'alert-triangle';
+            } else if (diasHabiles >= 3) {
+                estado = 'rojo';
+                bgClass = 'bg-rose-100 text-rose-900 border-rose-400 font-bold animate-bounce';
+                icon = 'alert-octagon';
+            }
+
+            return {
+                dias: diasHabiles,
+                estado: estado,
+                bgClass: bgClass,
+                icon: icon,
+                label: `${diasHabiles} día${diasHabiles === 1 ? '' : 's'} hábil${diasHabiles === 1 ? '' : 'es'}`
+            };
+        }
+
+        // MAIN APPLICATION LOGIC
+        const app = {
+            init: function() {
+                // Escuchador en tiempo real de Firebase para expedientes y usuarios
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ collection, onSnapshot }) => {
+                            onSnapshot(collection(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'expedientes'), (snapshot) => {
+                                const cloudExp = [];
+                                snapshot.forEach(doc => cloudExp.push(doc.data()));
+                                if (cloudExp.length > 0) {
+                                    expedientes = cloudExp;
+                                    saveState();
+                                    if (currentUser) {
+                                        app.renderDashboard();
+                                    }
+                                }
+                            });
+
+                            onSnapshot(collection(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users'), (snapshot) => {
+                                const cloudUsers = [];
+                                snapshot.forEach(doc => cloudUsers.push(doc.data()));
+                                if (cloudUsers.length > 0) {
+                                    users = cloudUsers;
+                                    saveState();
+                                    if (currentUser && (currentUser.role === 'Juez' || currentUser.role === 'Administrador')) {
+                                        const pendingCount = users.filter(u => u.status === 'Pendiente').length;
+                                        const pendingBadge = document.getElementById('pending-users-badge');
+                                        if (pendingBadge) pendingBadge.textContent = `Aprobar Solicitudes (${pendingCount})`;
+                                    }
+                                }
+                            });
+                        });
+                    } catch(e) { console.warn("Error iniciando listener de Firebase:", e); }
+                }
+
+                if (!currentUser) {
+                    this.renderLogin();
+                } else {
+                    this.renderDashboard();
+                }
+            },
+
+            handleLogin: async function(e) {
+                if (e && e.preventDefault) e.preventDefault();
+                try {
+                    const uInput = (document.getElementById('login-username').value || '').trim();
+                    const pInput = (document.getElementById('login-password').value || '').trim();
+
+                    if (!uInput || !pInput) {
+                        showAlert('Por favor ingrese usuario y contraseña.', 'error');
+                        return;
+                    }
+
+                    // 1. Obtener lista actualizada de usuarios directamente desde Firebase Firestore si está disponible
+                    if (window.isFirebaseConfigured && window.db) {
+                        try {
+                            const { collection, getDocs } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                            const querySnapshot = await getDocs(collection(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users'));
+                            const cloudUsers = [];
+                            querySnapshot.forEach(doc => cloudUsers.push(doc.data()));
+                            if (cloudUsers.length > 0) {
+                                users = cloudUsers;
+                                localStorage.setItem('tld_users', JSON.stringify(users));
+                            }
+                        } catch (fbErr) {
+                            console.warn("No se pudo obtener usuarios en tiempo real de Firebase, usando copia local:", fbErr);
+                        }
+                    }
+
+                    // Asegurar usuarios default de respaldo si la base de datos está totalmente vacía
+                    ensureDefaultUsers();
+
+                    // 2. Validar coincidencia de credenciales
+                    const user = users.find(x => 
+                        x && x.username && x.password &&
+                        x.username.toString().trim().toLowerCase() === uInput.toLowerCase() && 
+                        x.password.toString().trim() === pInput
+                    );
+
+                    if (!user) {
+                        showAlert('Usuario o contraseña incorrectos.', 'error');
+                        return;
+                    }
+
+                    if (user.status === 'Pendiente') {
+                        showAlert('Tu usuario aún no ha sido autorizado por el Juez o Administrador. Por favor comunícate con la Ponencia.', 'error');
+                        return;
+                    }
+
+                    currentUser = user;
+                    saveState();
+                    logAction(`Inicio de sesión exitoso en la plataforma.`);
+                    showAlert(`Bienvenido/a, ${user.name}`, 'success');
+                    this.renderDashboard();
+                } catch (err) {
+                    console.error("Error durante el inicio de sesión:", err);
+                    ensureDefaultUsers();
+                    showAlert('Error al procesar el inicio de sesión. Intente nuevamente.', 'error');
+                }
+            },
+
+            navigate: function(view) {
+                if (!currentUser && view !== 'login' && view !== 'register') {
+                    this.renderLogin();
+                    return;
+                }
+                if (view === 'dashboard') this.renderDashboard();
+                else if (view === 'users') this.renderAdminPanel();
+                else if (view === 'audit') this.renderAuditLogModal();
+                else if (view === 'profile') this.renderProfileModal();
+            },
+
+            // --- HEADER COMPONENT WITH INSTITUTIONAL SILVER DESIGN ---
+            getHeaderHtml: function() {
+                const pendingUsersCount = users.filter(u => u.status === 'Pendiente').length;
+                const isJudgeOrAdmin = currentUser && (currentUser.role === 'Juez' || currentUser.role === 'Administrador');
+
+                return `
+                    <header class="silver-gradient text-white shadow-xl border-b border-amber-500/30 sticky top-0 z-30">
+                        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+                            <div class="flex flex-col md:flex-row justify-between items-center gap-4">
+                                <div class="flex items-center space-x-3 cursor-pointer" onclick="app.navigate('dashboard')">
+                                    <div class="w-12 h-12 bg-slate-900 border-2 border-amber-500/80 rounded-full flex items-center justify-center shadow-md">
+                                        <i data-lucide="scale" class="w-6 h-6 text-amber-400"></i>
+                                    </div>
+                                    <div>
+                                        <h1 class="font-serif font-bold text-lg md:text-xl tracking-wider text-amber-100 uppercase">
+                                            Tribunal Laboral Burocrático del Estado de Durango
+                                        </h1>
+                                        <p class="text-xs text-slate-300 font-medium flex items-center gap-2">
+                                            <span class="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Ponencia Número Tres</span>
+                                            <span>• Control Digital de Expedientes</span>
+                                        </p>
+                                    </div>
+                                </div>
+
+                                ${currentUser ? `
+                                    <div class="flex items-center space-x-3 text-xs">
+                                        ${isJudgeOrAdmin && pendingUsersCount > 0 ? `
+                                            <button onclick="app.renderAdminPanel()" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow-md animate-pulse">
+                                                <i data-lucide="user-plus" class="w-4 h-4"></i>
+                                                <span>Aprobar Solicitudes (${pendingUsersCount})</span>
+                                            </button>
+                                        ` : ''}
+
+                                        <div class="bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700 text-right">
+                                            <div class="font-bold text-amber-300">${currentUser.name}</div>
+                                            <div class="text-slate-400 text-[11px]">${currentUser.area} (${currentUser.role})</div>
+                                        </div>
+
+                                        ${isJudgeOrAdmin ? `
+                                            <button onclick="app.renderAuditLogModal()" class="p-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-slate-300 hover:text-white transition" title="Bitácora de Auditoría">
+                                                <i data-lucide="shield-check" class="w-4 h-4"></i>
+                                            </button>
+                                            <button onclick="app.renderAdminPanel()" class="p-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-slate-300 hover:text-white transition" title="Gestión de Servidores Públicos">
+                                                <i data-lucide="users" class="w-4 h-4"></i>
+                                            </button>
+                                        ` : ''}
+
+                                        <button onclick="app.renderReportModal()" class="bg-amber-600 hover:bg-amber-500 text-white font-semibold px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow transition" title="Extraer Visor General e Informe">
+                                            <i data-lucide="file-spread-sheet" class="w-4 h-4"></i>
+                                            <span class="hidden md:inline">Visor General</span>
+                                        </button>
+
+                                        <button onclick="app.logout()" class="p-2 bg-rose-900/40 hover:bg-rose-900/60 border border-rose-700/50 rounded-lg text-rose-200 transition" title="Cerrar Sesión">
+                                            <i data-lucide="log-out" class="w-4 h-4"></i>
+                                        </button>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </header>
+                `;
+            },
+
+            // --- MAIN DASHBOARD VIEW WITH SEARCH & COMPREHENSIVE VISOR ---
+            renderDashboard: function() {
+                const appDiv = document.getElementById('app');
+                const totalCount = expedientes.length;
+                const enTuAreaCount = expedientes.filter(e => e.areaActual === currentUser.area).length;
+                const turnosPendientesCount = expedientes.filter(e => e.areaActual === currentUser.area && e.estadoRecepcion === 'Pendiente_Aceptacion').length;
+                
+                // Recalcular semaforización general
+                let urgenteRojoCount = 0;
+                let prioritarioAmarilloCount = 0;
+                expedientes.forEach(e => {
+                    const st = calcularDiasHabilesTranscurridos(e.fechaTurno);
+                    if (st.estado === 'rojo') urgenteRojoCount++;
+                    if (st.estado === 'amarillo') prioritarioAmarilloCount++;
+                });
+
+                appDiv.innerHTML = `
+                    ${this.getHeaderHtml()}
+
+                    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+                        
+                        <!-- PANEL DE ACCIONES E INFORMACIÓN GENERAL DE LA PONENCIA -->
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div class="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex items-center space-x-4">
+                                <div class="p-3 bg-slate-900 text-amber-400 rounded-lg">
+                                    <i data-lucide="folder-kanban" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Expedientes Totales</p>
+                                    <h3 class="text-2xl font-bold text-slate-900" id="stat-total">${totalCount}</h3>
+                                </div>
+                            </div>
+
+                            <div class="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex items-center space-x-4">
+                                <div class="p-3 bg-amber-500 text-slate-950 rounded-lg">
+                                    <i data-lucide="building-2" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">En Tu Área (${currentUser.area})</p>
+                                    <h3 class="text-2xl font-bold text-slate-900" id="stat-area">${enTuAreaCount}</h3>
+                                </div>
+                            </div>
+
+                            <div class="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex items-center space-x-4">
+                                <div class="p-3 bg-blue-600 text-white rounded-lg">
+                                    <i data-lucide="clock" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Por Recibir en Área</p>
+                                    <h3 class="text-2xl font-bold text-blue-600" id="stat-turnos">${turnosPendientesCount}</h3>
+                                </div>
+                            </div>
+
+                            <div class="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex items-center space-x-4">
+                                <div class="p-3 bg-rose-600 text-white rounded-lg">
+                                    <i data-lucide="alert-octagon" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Semáforo Vencidos (3+ Días)</p>
+                                    <h3 class="text-2xl font-bold text-rose-600" id="stat-vencidos">${urgenteRojoCount}</h3>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- BARRA DE BÚSQUEDA AVANZADA & HERRAMIENTAS DE INFORME -->
+                        <div class="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex flex-col md:flex-row items-center justify-between gap-4">
+                            <!-- BUSCADOR INTELIGENTE -->
+                            <div class="relative w-full md:w-1/2">
+                                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                                    <i data-lucide="search" class="w-5 h-5"></i>
+                                </div>
+                                <input type="text" id="main-search-input" onkeyup="app.filterExpedientes()" 
+                                    placeholder="🔍 Buscar expediente por N°, Actor, Demandado, Área o Acción pendiente..." 
+                                    class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition shadow-inner">
+                            </div>
+
+                            <!-- BOTONES DE ACCIÓN PRINCIPALES -->
+                            <div class="flex items-center space-x-3 w-full md:w-auto justify-end">
+                                <button onclick="app.renderReportModal()" class="w-full md:w-auto bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-4 py-2.5 rounded-xl shadow-md flex items-center justify-center space-x-2 transition">
+                                    <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+                                    <span>Extraer Informe General de Datos</span>
+                                </button>
+
+                                ${(currentUser.role === 'Juez' || currentUser.role === 'Administrador' || currentUser.role === 'Oficial' || currentUser.area === 'Oficialía' || (currentUser.permissions && currentUser.permissions.canRegister)) ? `
+                                    <button onclick="app.renderNewExpedienteModal()" class="w-full md:w-auto bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold px-4 py-2.5 rounded-xl shadow-md border border-amber-500/50 flex items-center justify-center space-x-2 transition">
+                                        <i data-lucide="plus-circle" class="w-5 h-5"></i>
+                                        <span>Registrar Expediente</span>
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </div>
+
+                        <!-- TABLA GENERAL DE CONTROL DE EXPEDIENTES -->
+                        <div class="bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden">
+                            <div class="p-4 bg-slate-900 text-white flex justify-between items-center border-b border-amber-500/30">
+                                <div class="flex items-center space-x-2">
+                                    <i data-lucide="list-checks" class="w-5 h-5 text-amber-400"></i>
+                                    <h2 class="font-serif font-bold text-base tracking-wide text-amber-100">Visor de Expedientes en Trámite</h2>
+                                </div>
+                                <div class="text-xs text-slate-300 font-mono" id="exp-counter-label">Mostrando ${totalCount} registros</div>
+                            </div>
+
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr class="bg-slate-100 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                                            <th class="p-3">Expediente / Juicio</th>
+                                            <th class="p-3">Partes (Actor vs Demandado)</th>
+                                            <th class="p-3">Área Última Custodia</th>
+                                            <th class="p-3">Fecha y Tiempo de Turno</th>
+                                            <th class="p-3">Acción / Tarea Pendiente</th>
+                                            <th class="p-3 text-center">Estado / Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="expedientes-table-body" class="divide-y divide-slate-200 text-xs">
+                                        ${this.getExpedientesTableRowsHtml(expedientes)}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </main>
+                `;
+                lucide.createIcons();
+            },
+
+            // --- GENERAR FILAS DE TABLA CON SEMAFIORIZACIÓN Y RUTA ---
+            getExpedientesTableRowsHtml: function(expList) {
+                if (!expList || expList.length === 0) {
+                    return `
+                        <tr>
+                            <td colspan="6" class="p-8 text-center text-slate-500 font-medium">
+                                No se encontraron expedientes que coincidan con los criterios de búsqueda.
+                            </td>
+                        </tr>
+                    `;
+                }
+
+                return expList.map(exp => {
+                    const statusClass = exp.estadoRecepcion === 'Pendiente_Aceptacion' ? 'bg-amber-50 border-l-4 border-amber-500' : 'bg-white';
+                    const semaforo = calcularDiasHabilesTranscurridos(exp.fechaTurno);
+
+                    return `
+                        <tr class="${statusClass} hover:bg-slate-50 transition">
+                            <td class="p-3 font-medium text-slate-900">
+                                <div class="font-bold text-sm text-slate-900">${exp.numero}</div>
+                                <div class="text-[11px] text-slate-500 font-normal">${exp.juicio}</div>
+                            </td>
+                            <td class="p-3">
+                                <div class="font-semibold text-slate-800">${exp.actor}</div>
+                                <div class="text-[11px] text-slate-500">vs. ${exp.demandado}</div>
+                            </td>
+                            <td class="p-3">
+                                <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-800 text-amber-300">
+                                    <i data-lucide="building" class="w-3 h-3 mr-1"></i>
+                                    ${exp.areaActual}
+                                </span>
+                                ${exp.estadoRecepcion === 'Pendiente_Aceptacion' ? `
+                                    <div class="mt-1 text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
+                                        ➔ En tránsito a esta área
+                                    </div>
+                                ` : ''}
+                            </td>
+                            <td class="p-3 whitespace-nowrap">
+                                <div class="text-slate-700 font-semibold">${exp.fechaTurno || 'N/A'}</div>
+                                <div class="mt-1 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${semaforo.bgClass}">
+                                    <i data-lucide="${semaforo.icon}" class="w-3 h-3 mr-1"></i>
+                                    ${semaforo.label}
+                                </div>
+                            </td>
+                            <td class="p-3">
+                                <div class="text-slate-800 font-medium max-w-xs truncate" title="${exp.tareaPendiente}">
+                                    ${exp.tareaPendiente || 'Sin acción asignada'}
+                                </div>
+                            </td>
+                            <td class="p-3 text-center whitespace-nowrap">
+                                <div class="flex items-center justify-center space-x-1">
+                                    <button onclick="app.renderTrazabilidadModal('${exp.id}')" class="p-1.5 bg-slate-200 hover:bg-slate-300 rounded-lg text-slate-700" title="Ver Historial de Trazabilidad">
+                                        <i data-lucide="history" class="w-4 h-4"></i>
+                                    </button>
+
+                                    ${exp.areaActual === currentUser.area && exp.estadoRecepcion === 'Pendiente_Aceptacion' && (currentUser.role === 'Juez' || currentUser.role === 'Administrador' || !currentUser.permissions || currentUser.permissions.canRecibir) ? `
+                                        <button onclick="app.handleAceptarExpediente('${exp.id}')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow flex items-center space-x-1">
+                                            <i data-lucide="check-circle" class="w-3.5 h-3.5"></i>
+                                            <span>Recibir</span>
+                                        </button>
+                                    ` : ''}
+
+                                    ${exp.areaActual === currentUser.area && exp.estadoRecepcion === 'Aceptado' && (currentUser.role === 'Juez' || currentUser.role === 'Administrador' || !currentUser.permissions || currentUser.permissions.canTurnar) ? `
+                                        <button onclick="app.renderTurnarExpedienteModal('${exp.id}')" class="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg shadow flex items-center space-x-1">
+                                            <i data-lucide="send" class="w-3.5 h-3.5"></i>
+                                            <span>Turnar</span>
+                                        </button>
+                                    ` : ''}
+
+                                    ${(currentUser.role === 'Juez' || currentUser.role === 'Administrador' || (currentUser.permissions && currentUser.permissions.canDelete)) ? `
+                                        <button onclick="app.renderDeleteExpedienteModal('${exp.id}')" class="p-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg" title="Eliminar Expediente">
+                                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                        </button>
+                                    ` : ''}
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            },
+
+            // --- FILTRADO EN TIEMPO REAL ---
+            filterExpedientes: function() {
+                const searchVal = (document.getElementById('main-search-input')?.value || '').toLowerCase().trim();
+                const filtered = expedientes.filter(exp => {
+                    return (exp.numero && exp.numero.toLowerCase().includes(searchVal)) ||
+                           (exp.actor && exp.actor.toLowerCase().includes(searchVal)) ||
+                           (exp.demandado && exp.demandado.toLowerCase().includes(searchVal)) ||
+                           (exp.areaActual && exp.areaActual.toLowerCase().includes(searchVal)) ||
+                           (exp.tareaPendiente && exp.tareaPendiente.toLowerCase().includes(searchVal));
+                });
+
+                const tbody = document.getElementById('expedientes-table-body');
+                const label = document.getElementById('exp-counter-label');
+                if (tbody) tbody.innerHTML = this.getExpedientesTableRowsHtml(filtered);
+                if (label) label.textContent = `Mostrando ${filtered.length} de ${expedientes.length} registros`;
+                lucide.createIcons();
+            },
+
+            // --- REGISTRAR NUEVO EXPEDIENTE ---
+            renderNewExpedienteModal: function() {
+                const content = `
+                    <div class="p-6 space-y-4">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="folder-plus" class="w-5 h-5 text-amber-600"></i>
+                                Registrar Nuevo Expediente en Ponencia
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <form onsubmit="app.handleNewExpedienteSubmit(event)" class="space-y-3 text-xs">
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="font-bold text-slate-700">Número de Expediente:</label>
+                                    <input type="text" id="new-exp-num" required placeholder="Ej. 125/2026-P3" class="w-full p-2 border rounded font-bold text-slate-900">
+                                </div>
+                                <div>
+                                    <label class="font-bold text-slate-700">Tipo de Juicio / Procedimiento:</label>
+                                    <input type="text" id="new-exp-juicio" required placeholder="Ordinario Laboral Burocrático" class="w-full p-2 border rounded font-semibold">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="font-bold text-slate-700">Parte Actora / Trabajador:</label>
+                                    <input type="text" id="new-exp-actor" required placeholder="Nombre del actor" class="w-full p-2 border rounded">
+                                </div>
+                                <div>
+                                    <label class="font-bold text-slate-700">Parte Demandada / Dependencia:</label>
+                                    <input type="text" id="new-exp-demandado" required placeholder="Dependencia o entidad" class="w-full p-2 border rounded">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="font-bold text-slate-700">Promoción Inicial / Tarea Pendiente:</label>
+                                <textarea id="new-exp-tarea" required rows="2" placeholder="Describa la promoción o trámite inicial asignado..." class="w-full p-2 border rounded font-sans"></textarea>
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 rounded font-bold">Cancelar</button>
+                                <button type="submit" class="px-4 py-1.5 bg-slate-900 text-amber-400 font-bold rounded shadow">Registrar Radicación</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleNewExpedienteSubmit: async function(e) {
+                e.preventDefault();
+                const num = document.getElementById('new-exp-num').value.trim();
+                const juicio = document.getElementById('new-exp-juicio').value.trim();
+                const actor = document.getElementById('new-exp-actor').value.trim();
+                const demandado = document.getElementById('new-exp-demandado').value.trim();
+                const tarea = document.getElementById('new-exp-tarea').value.trim();
+
+                const nowStr = new Date().toLocaleString('es-MX');
+
+                const newExp = {
+                    id: 'exp-' + Date.now(),
+                    numero: num,
+                    juicio: juicio,
+                    actor: actor,
+                    demandado: demandado,
+                    areaActual: currentUser.area,
+                    estadoRecepcion: 'Aceptado',
+                    fechaTurno: nowStr,
+                    tareaPendiente: tarea,
+                    historial: [
+                        { fecha: nowStr, usuario: `${currentUser.name} (${currentUser.role})`, area: currentUser.area, accion: `Radicación e ingreso de expediente con promoción: "${tarea}"` }
+                    ]
+                };
+
+                expedientes.unshift(newExp);
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                        await setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'expedientes', newExp.id), newExp);
+                    } catch (err) { console.error("Error guardando expediente en Firebase:", err); }
+                }
+
+                logAction(`Expediente ${num} radicado y registrado en ${currentUser.area}`);
+                closeModal();
+                showAlert(`Expediente ${num} registrado exitosamente.`, 'success');
+                this.renderDashboard();
+            },
+
+            // --- TURNAR EXPEDIENTE ---
+            renderTurnarExpedienteModal: function(expId) {
+                const exp = expedientes.find(e => e.id === expId);
+                if (!exp) return;
+
+                const content = `
+                    <div class="p-6 space-y-4">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="send" class="w-5 h-5 text-amber-600"></i>
+                                Turnar Expediente ${exp.numero}
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <form onsubmit="app.handleSaveTurno(event, '${exp.id}')" class="space-y-3 text-xs">
+                            <div>
+                                <label class="font-bold text-slate-700">Área Destino:</label>
+                                <select id="turno-destino" required class="w-full p-2.5 border-2 border-amber-400 rounded bg-amber-50/30 font-bold text-slate-900">
+                                    ${AREAS.filter(a => a !== exp.areaActual).map(a => `<option value="${a}">${a}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="font-bold text-slate-700">Instrucción / Tarea Pendiente a Realizar:</label>
+                                <textarea id="turno-tarea" required rows="3" placeholder="Indique el acuerdo, notificación o proyecto a desarrollar..." class="w-full p-2 border rounded font-sans"></textarea>
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 rounded font-bold">Cancelar</button>
+                                <button type="submit" class="px-4 py-1.5 bg-amber-500 text-slate-950 font-bold rounded shadow">Confirmar Turno</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleSaveTurno: async function(e, expId) {
+                e.preventDefault();
+                const exp = expedientes.find(x => x.id === expId);
+                if (!exp) return;
+
+                const destino = document.getElementById('turno-destino').value;
+                const tarea = document.getElementById('turno-tarea').value.trim();
+                const nowStr = new Date().toLocaleString('es-MX');
+
+                exp.areaActual = destino;
+                exp.estadoRecepcion = 'Pendiente_Aceptacion';
+                exp.fechaTurno = nowStr;
+                exp.tareaPendiente = tarea;
+
+                if (!exp.historial) exp.historial = [];
+                exp.historial.unshift({
+                    fecha: nowStr,
+                    usuario: `${currentUser.name} (${currentUser.role})`,
+                    area: currentUser.area,
+                    accion: `Turnado hacia [${destino}] con la instrucción: "${tarea}"`
+                });
+
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                        await setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'expedientes', exp.id), exp);
+                    } catch(err) { console.error("Error actualizando turno en Firebase:", err); }
+                }
+
+                logAction(`Expediente ${exp.numero} turnado a ${destino}`);
+                closeModal();
+                showAlert(`Expediente ${exp.numero} turnado exitosamente a ${destino}.`, 'success');
+                this.renderDashboard();
+            },
+
+            // --- ACEPTAR / RECIBIR EXPEDIENTE ---
+            handleAceptarExpediente: async function(expId) {
+                const exp = expedientes.find(x => x.id === expId);
+                if (!exp) return;
+
+                const nowStr = new Date().toLocaleString('es-MX');
+                exp.estadoRecepcion = 'Aceptado';
+                exp.fechaTurno = nowStr;
+
+                if (!exp.historial) exp.historial = [];
+                exp.historial.unshift({
+                    fecha: nowStr,
+                    usuario: `${currentUser.name} (${currentUser.role})`,
+                    area: currentUser.area,
+                    accion: `Recepción física y aceptación formal del expediente en ${currentUser.area}.`
+                });
+
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                        await setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'expedientes', exp.id), exp);
+                    } catch(err) { console.error("Error aceptando expediente en Firebase:", err); }
+                }
+
+                logAction(`Expediente ${exp.numero} recibido formalmente en ${currentUser.area}`);
+                showAlert(`Expediente ${exp.numero} recibido y aceptado.`, 'success');
+                this.renderDashboard();
+            },
+
+            // --- MOSTRAR TRAZABILIDAD E HISTORIAL COMPLETO ---
+            renderTrazabilidadModal: function(expId) {
+                const exp = expedientes.find(e => e.id === expId);
+                if (!exp) return;
+
+                const content = `
+                    <div class="p-6 space-y-4">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <div>
+                                <h3 class="text-lg font-serif font-bold text-slate-900">Historial de Trazabilidad</h3>
+                                <p class="text-xs text-slate-500 font-bold">${exp.numero} • ${exp.actor} vs ${exp.demandado}</p>
+                            </div>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <div class="space-y-3 max-h-80 overflow-y-auto pr-1">
+                            ${(exp.historial || []).map((h, i) => `
+                                <div class="p-3 rounded-lg border border-slate-200 ${i === 0 ? 'bg-amber-50/50 border-amber-300' : 'bg-slate-50'} text-xs">
+                                    <div class="flex justify-between font-bold text-slate-900">
+                                        <span>${h.area || 'N/A'}</span>
+                                        <span class="text-slate-500 font-mono">${h.fecha}</span>
+                                    </div>
+                                    <div class="text-[11px] text-amber-800 font-semibold mt-0.5">Por: ${h.usuario}</div>
+                                    <p class="mt-1 text-slate-700 font-medium">${h.accion}</p>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            // --- VISOR GENERAL E INFORME EXTRACTOR COMPLETO ---
+            renderReportModal: function() {
+                const content = `
+                    <div class="p-6 space-y-4 max-w-4xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <div>
+                                <h3 class="text-xl font-serif font-bold text-slate-900 flex items-center gap-2">
+                                    <i data-lucide="file-spreadsheet" class="w-6 h-6 text-emerald-700"></i>
+                                    Visor General e Informe de Datos en Tiempo Real
+                                </h3>
+                                <p class="text-xs text-slate-500 font-medium">
+                                    Reporte consolidado de ubicación de expedientes y semaforización
+                                </p>
+                            </div>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-6 h-6 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="overflow-x-auto border border-slate-200 rounded-xl max-h-96 overflow-y-auto">
+                            <table class="w-full text-left text-xs border-collapse">
+                                <thead class="bg-slate-900 text-amber-300 font-bold sticky top-0">
+                                    <tr>
+                                        <th class="p-2.5 border-b">N° Expediente</th>
+                                        <th class="p-2.5 border-b">Partes</th>
+                                        <th class="p-2.5 border-b">Área de Custodia Actual</th>
+                                        <th class="p-2.5 border-b">Días Hábiles</th>
+                                        <th class="p-2.5 border-b">Acción / Tarea Pendiente</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-200 bg-white">
+                                    ${expedientes.map(e => {
+                                        const sem = calcularDiasHabilesTranscurridos(e.fechaTurno);
+                                        return `
+                                            <tr class="hover:bg-slate-50">
+                                                <td class="p-2.5 font-bold text-slate-900">${e.numero}</td>
+                                                <td class="p-2.5">${e.actor} vs ${e.demandado}</td>
+                                                <td class="p-2.5 font-bold text-amber-800">${e.areaActual}</td>
+                                                <td class="p-2.5">
+                                                    <span class="px-2 py-0.5 rounded text-[10px] font-bold border ${sem.bgClass}">
+                                                        ${sem.label}
+                                                    </span>
+                                                </td>
+                                                <td class="p-2.5 text-slate-700">${e.tareaPendiente || 'N/A'}</td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="flex justify-between items-center pt-2">
+                            <span class="text-xs text-slate-500 font-mono">Total de expediente extraídos: ${expedientes.length}</span>
+                            <div class="flex space-x-2">
+                                <button onclick="window.print()" class="px-4 py-2 bg-slate-900 text-amber-400 font-bold text-xs rounded-lg shadow flex items-center gap-1.5">
+                                    <i data-lucide="printer" class="w-4 h-4"></i> Imprimir / Exportar PDF
+                                </button>
+                                <button onclick="closeModal()" class="px-4 py-2 bg-slate-200 text-slate-700 font-bold text-xs rounded-lg">Cerrar</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            logout: function() {
+                logAction(`Cierre de sesión de ${currentUser ? currentUser.name : ''}`);
+                currentUser = null;
+                saveState();
+                this.renderLogin();
+            },
+
+            // PANEL DE ADMINISTRACIÓN Y GESTIÓN DE HABILIDADES/PERMISOS
+            renderAdminPanel: function() {
+                if (currentUser.role !== 'Juez' && currentUser.role !== 'Administrador') {
+                    showAlert('Acceso restringido únicamente para la Administración y el Juez.', 'error');
+                    return;
+                }
+
+                const content = `
+                    <div class="p-6 space-y-6 max-w-4xl w-full">
+                        <div class="flex justify-between items-center border-b border-slate-200 pb-4">
+                            <div>
+                                <h3 class="text-xl font-serif font-bold text-slate-900 flex items-center gap-2">
+                                    <i data-lucide="shield-alert" class="w-6 h-6 text-amber-600"></i>
+                                    Panel de Control de Servidores Públicos y Permisos
+                                </h3>
+                                <p class="text-xs text-slate-500 font-medium mt-0.5">
+                                    Gestión de usuarios, asignación de áreas y activación de habilidades específicas
+                                </p>
+                            </div>
+                            <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600">
+                                <i data-lucide="x" class="w-6 h-6"></i>
+                            </button>
+                        </div>
+
+                        <!-- TABLA DE USUARIOS Y GESTIÓN DE PERMISOS -->
+                        <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm max-h-96 overflow-y-auto">
+                            <table class="w-full text-left text-xs border-collapse">
+                                <thead class="bg-slate-900 text-amber-300 font-bold sticky top-0 z-10">
+                                    <tr>
+                                        <th class="p-2.5 border-b">Servidor Público</th>
+                                        <th class="p-2.5 border-b">Cargo / Rol</th>
+                                        <th class="p-2.5 border-b">Área Asignada</th>
+                                        <th class="p-2.5 border-b">Estado</th>
+                                        <th class="p-2.5 border-b text-center">Habilidades Habilitadas (Excepto Juez)</th>
+                                        <th class="p-2.5 border-b text-center">Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-200 bg-white">
+                                    ${users.map(u => {
+                                        const isJudge = u.role === 'Juez';
+                                        const perms = u.permissions || { canRegister: false, canTurnar: true, canRecibir: true, canDelete: false, canViewAudit: false };
+
+                                        return `
+                                            <tr class="hover:bg-slate-50 transition">
+                                                <td class="p-2.5 font-bold text-slate-900">
+                                                    <div>${u.name}</div>
+                                                    <div class="text-[10px] text-slate-500 font-normal">@${u.username} • ${u.email || ''}</div>
+                                                </td>
+                                                <td class="p-2.5 font-semibold text-slate-700">${u.role}</td>
+                                                <td class="p-2.5">
+                                                    <select onchange="app.cambiarAreaUsuario('${u.id}', this.value)" 
+                                                        class="p-1 border-2 border-amber-400 rounded bg-amber-50/50 font-semibold text-slate-900 text-xs">
+                                                        ${AREAS.map(a => `<option value="${a}" ${a === u.area ? 'selected' : ''}>${a}</option>`).join('')}
+                                                    </select>
+                                                </td>
+                                                <td class="p-2.5">
+                                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${u.status === 'Activo' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800 animate-pulse'}">
+                                                        ${u.status}
+                                                    </span>
+                                                </td>
+                                                <td class="p-2.5">
+                                                    ${isJudge ? `
+                                                        <span class="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded border border-slate-300 block text-center">
+                                                            🔒 Control Total Inmodificable
+                                                        </span>
+                                                    ` : `
+                                                        <div class="flex flex-wrap gap-1 justify-center text-[10px]">
+                                                            <label class="flex items-center space-x-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-300 cursor-pointer">
+                                                                <input type="checkbox" ${perms.canRegister ? 'checked' : ''} onchange="app.togglePermisoUsuario('${u.id}', 'canRegister', this.checked)">
+                                                                <span>Registrar</span>
+                                                            </label>
+                                                            <label class="flex items-center space-x-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-300 cursor-pointer">
+                                                                <input type="checkbox" ${perms.canTurnar ? 'checked' : ''} onchange="app.togglePermisoUsuario('${u.id}', 'canTurnar', this.checked)">
+                                                                <span>Turnar</span>
+                                                            </label>
+                                                            <label class="flex items-center space-x-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-300 cursor-pointer">
+                                                                <input type="checkbox" ${perms.canRecibir ? 'checked' : ''} onchange="app.togglePermisoUsuario('${u.id}', 'canRecibir', this.checked)">
+                                                                <span>Recibir</span>
+                                                            </label>
+                                                            <label class="flex items-center space-x-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-300 cursor-pointer">
+                                                                <input type="checkbox" ${perms.canDelete ? 'checked' : ''} onchange="app.togglePermisoUsuario('${u.id}', 'canDelete', this.checked)">
+                                                                <span>Eliminar</span>
+                                                            </label>
+                                                        </div>
+                                                    `}
+                                                </td>
+                                                <td class="p-2.5 text-center">
+                                                    ${u.status === 'Pendiente' ? `
+                                                        <div class="flex items-center justify-center space-x-1">
+                                                            <button onclick="app.aprobarUsuario('${u.id}')" class="px-2 py-1 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-500 shadow">Aprobar</button>
+                                                            <button onclick="app.rechazarUsuario('${u.id}')" class="px-2 py-1 bg-rose-600 text-white rounded font-bold hover:bg-rose-500 shadow">Rechazar</button>
+                                                        </div>
+                                                    ` : `
+                                                        <span class="text-[10px] text-slate-400 font-bold">Activo</span>
+                                                    `}
+                                                </td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="flex justify-end pt-2">
+                            <button onclick="closeModal()" class="px-4 py-2 bg-slate-900 text-amber-400 font-bold text-xs rounded-lg shadow">
+                                Aceptar y Cerrar
+                            </button>
+                        </div>
+                    </div>
+                `;
+
+                openModal(content);
+            },
+
+            // ACTIVAR O DESACTIVAR HABILIDADES/PERMISOS ESPECÍFICOS POR USUARIO
+            togglePermisoUsuario: function(userId, permKey, isChecked) {
+                const targetUser = users.find(u => u.id === userId);
+                if (!targetUser) return;
+
+                if (targetUser.role === 'Juez') {
+                    showAlert('Las habilidades del Juez son jerárquicas e inalterables.', 'error');
+                    return;
+                }
+
+                if (!targetUser.permissions) {
+                    targetUser.permissions = { canRegister: false, canTurnar: true, canRecibir: true, canDelete: false, canViewAudit: false };
+                }
+
+                targetUser.permissions[permKey] = isChecked;
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ doc, setDoc }) => {
+                        setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users', targetUser.id), targetUser);
+                    });
+                }
+
+                logAction(`Actualización de permisos para ${targetUser.name}: ${permKey} = ${isChecked}`);
+                showAlert(`Permiso actualizado para ${targetUser.name}`, 'success');
+            },
+
+            cambiarAreaUsuario: function(userId, nuevaArea) {
+                const targetUser = users.find(u => u.id === userId);
+                if (!targetUser) return;
+
+                targetUser.area = nuevaArea;
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ doc, setDoc }) => {
+                        setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users', targetUser.id), targetUser);
+                    });
+                }
+
+                logAction(`Reasignación de área para ${targetUser.name} a: ${nuevaArea}`);
+                showAlert(`Área actualizada a ${nuevaArea} para ${targetUser.name}`, 'success');
+                this.renderDashboard();
+            },
+
+            aprobarUsuario: function(userId) {
+                const u = users.find(x => x.id === userId);
+                if (!u) return;
+
+                u.status = 'Activo';
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ doc, setDoc }) => {
+                        setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users', u.id), u);
+                    });
+                }
+
+                logAction(`Usuario ${u.username} aprobado por ${currentUser.name}`);
+                showAlert(`Usuario ${u.name} aprobado exitosamente.`, 'success');
+                this.renderAdminPanel();
+            },
+
+            rechazarUsuario: async function(userId) {
+                const idx = users.findIndex(x => x.id === userId);
+                if (idx === -1) return;
+
+                const u = users[idx];
+                users.splice(idx, 1);
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        const { doc, deleteDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                        await deleteDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users', userId));
+                    } catch (e) { console.error("Error eliminando en Firebase:", e); }
+                }
+
+                logAction(`Solicitud de usuario ${u.username} rechazada.`);
+                showAlert(`Solicitud de ${u.name} rechazada y removida.`, 'info');
+                this.renderAdminPanel();
+            },
+
+            renderLogin: function() {
+                const appDiv = document.getElementById('app');
+                appDiv.innerHTML = `
+                    <div class="min-h-screen flex items-center justify-center p-4 silver-gradient">
+                        <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl max-w-md w-full border border-amber-500/30 overflow-hidden p-8 space-y-6">
+                            <div class="text-center space-y-2">
+                                <div class="w-16 h-16 bg-slate-900 border-2 border-amber-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
+                                    <i data-lucide="scale" class="w-8 h-8 text-amber-400"></i>
+                                </div>
+                                <h2 class="font-serif font-bold text-xl text-slate-900 uppercase tracking-wide">
+                                    Tribunal Laboral Burocrático
+                                </h2>
+                                <p class="text-xs font-semibold text-amber-700 bg-amber-50 py-1 px-3 rounded-full border border-amber-200 inline-block">
+                                    Control Digital de Expedientes • Ponencia Tres
+                                </p>
+                            </div>
+
+                            <form onsubmit="app.handleLogin(event)" class="space-y-4 text-xs font-medium">
+                                <div>
+                                    <label class="block text-slate-700 font-bold mb-1">Nombre de Usuario:</label>
+                                    <div class="relative">
+                                        <i data-lucide="user" class="w-4 h-4 absolute left-3 top-3 text-slate-400"></i>
+                                        <input type="text" id="login-username" required placeholder="Ej. Juez3 o Admin" 
+                                            class="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none">
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-slate-700 font-bold mb-1">Contraseña:</label>
+                                    <div class="relative">
+                                        <i data-lucide="lock" class="w-4 h-4 absolute left-3 top-3 text-slate-400"></i>
+                                        <input type="password" id="login-password" required placeholder="••••••••" 
+                                            class="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none">
+                                    </div>
+                                </div>
+
+                                <button type="submit" class="w-full py-3 bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold rounded-lg shadow-lg border border-amber-500/40 transition">
+                                    Ingresar a la Plataforma
+                                </button>
+                            </form>
+
+                            <div class="pt-4 border-t border-slate-200 text-center text-xs">
+                                <p class="text-slate-500">¿Nuevo servidor público adscrito?</p>
+                                <button onclick="app.renderRegisterModal()" class="mt-1 font-bold text-amber-700 hover:underline">
+                                    Solicitar Registro de Usuario
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                lucide.createIcons();
+            },
+
+            renderRegisterModal: function() {
+                const content = `
+                    <div class="p-6 space-y-4">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-slate-900">Solicitar Registro de Servidor Público</h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <form onsubmit="app.handleRegisterSubmit(event)" class="space-y-3 text-xs">
+                            <div>
+                                <label class="font-bold text-slate-700">Nombre Completo:</label>
+                                <input type="text" id="reg-fullname" required placeholder="Ej. Lic. Carlos Ramírez" class="w-full p-2 border rounded font-semibold text-slate-900">
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="font-bold text-slate-700">Usuario Deseado:</label>
+                                    <input type="text" id="reg-username" required placeholder="ej. cramirez" class="w-full p-2 border rounded">
+                                </div>
+                                <div>
+                                    <label class="font-bold text-slate-700">Contraseña:</label>
+                                    <input type="password" id="reg-password" required placeholder="••••••••" class="w-full p-2 border rounded">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="font-bold text-slate-700">Cargo / Rol:</label>
+                                    <select id="reg-role" required class="w-full p-2 border rounded font-semibold text-slate-900">
+                                        ${ROLES.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="font-bold text-slate-700">Área Adscrita:</label>
+                                    <select id="reg-area" required class="w-full p-2 border rounded font-semibold text-slate-900">
+                                        ${AREAS.map(a => `<option value="${a}">${a}</option>`).join('')}
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="font-bold text-slate-700">Correo Electrónico Oficial:</label>
+                                <input type="email" id="reg-email" required placeholder="correo@tribunallaboraldurango.gob.mx" class="w-full p-2 border rounded">
+                            </div>
+                            <div class="p-3 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-900">
+                                ⚠️ Su solicitud será enviada al Juez y al Administrador para su validación y autorización previa.
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 rounded font-bold">Cancelar</button>
+                                <button type="submit" class="px-4 py-1.5 bg-amber-500 text-slate-950 font-bold rounded shadow">Enviar Solicitud</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleRegisterSubmit: async function(e) {
+                e.preventDefault();
+                const name = document.getElementById('reg-fullname').value.trim();
+                const username = document.getElementById('reg-username').value.trim();
+                const password = document.getElementById('reg-password').value.trim();
+                const role = document.getElementById('reg-role').value;
+                const area = document.getElementById('reg-area').value;
+                const email = document.getElementById('reg-email').value.trim();
+
+                const existing = users.find(u => u.username.toLowerCase() === username.toLowerCase() && u.status !== 'Rechazado');
+                if (existing) {
+                    showAlert('El nombre de usuario ya se encuentra registrado o pendiente de aprobación.', 'error');
+                    return;
+                }
+
+                const newUser = {
+                    id: 'u-' + Date.now(),
+                    name: name,
+                    username: username,
+                    password: password,
+                    role: role,
+                    area: area,
+                    email: email,
+                    status: 'Pendiente',
+                    fechaAlta: new Date().toISOString().substring(0, 10),
+                    permissions: {
+                        canRegister: role === 'Oficial' || role === 'Juez' || role === 'Administrador',
+                        canTurnar: true,
+                        canRecibir: true,
+                        canDelete: false,
+                        canViewAudit: false
+                    }
+                };
+
+                users.push(newUser);
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                        await setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users', newUser.id), newUser);
+                    } catch (err) { console.error("Error guardando registro en Firebase:", err); }
+                }
+
+                logAction(`Solicitud de registro enviada para ${username}`);
+                closeModal();
+                showAlert('Solicitud de registro enviada exitosamente. Espere la aprobación del Juez.', 'success');
+            },
+
+            renderAuditLogModal: function() {
+                const content = `
+                    <div class="p-6 space-y-4">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="shield-check" class="w-5 h-5 text-amber-600"></i>
+                                Bitácora de Auditoría Unalterable
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <div class="space-y-2 max-h-80 overflow-y-auto font-mono text-xs">
+                            ${auditLogs.map(l => `
+                                <div class="p-2.5 bg-slate-900 text-slate-200 rounded border border-slate-800">
+                                    <div class="flex justify-between text-amber-400 font-bold">
+                                        <span>[${l.fecha}] ${l.usuario} (${l.area})</span>
+                                    </div>
+                                    <p class="mt-1 text-slate-300 font-sans">${l.accion}</p>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            renderDeleteExpedienteModal: function(expId) {
+                const exp = expedientes.find(e => e.id === expId);
+                if (!exp) return;
+
+                const content = `
+                    <div class="p-6 space-y-4">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-rose-700">Eliminar Expediente ${exp.numero}</h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <p class="text-xs text-slate-700 font-medium">
+                            ¿Está seguro de eliminar permanentemente el expediente <strong>${exp.numero}</strong>? Esta acción quedará registrada en la bitácora de auditoría.
+                        </p>
+                        <div class="flex justify-end space-x-2 pt-3">
+                            <button onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 rounded font-bold text-xs">Cancelar</button>
+                            <button onclick="app.handleDeleteExpediente('${exp.id}')" class="px-4 py-1.5 bg-rose-700 text-white font-bold text-xs rounded shadow">Confirmar Eliminación</button>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleDeleteExpediente: async function(expId) {
+                const idx = expedientes.findIndex(e => e.id === expId);
+                if (idx === -1) return;
+
+                const exp = expedientes[idx];
+                expedientes.splice(idx, 1);
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        const { doc, deleteDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                        await deleteDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'expedientes', expId));
+                    } catch(e) {
+                        console.warn("Sincronización remota restringida por reglas de Firestore (Permisos). Cambio guardado localmente:", e);
+                    }
+                }
+
+                logAction(`Expediente ${exp.numero} eliminado permanentemente por ${currentUser.name}`);
+                closeModal();
+                showAlert(`Expediente ${exp.numero} eliminado exitosamente.`, 'info');
+                this.renderDashboard();
+            }
+        };
+
+        // UI HELPER FUNCTIONS
+        function openModal(contentHtml) {
+            const container = document.getElementById('modal-container');
+            const content = document.getElementById('modal-content');
+            if (container && content) {
+                content.innerHTML = contentHtml;
+                container.classList.remove('hidden');
+                lucide.createIcons();
+            }
+        }
+
+        function closeModal() {
+            const container = document.getElementById('modal-container');
+            if (container) container.classList.add('hidden');
+        }
+
+        function showAlert(msg, type = 'info') {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            const bg = type === 'success' ? 'bg-emerald-800 text-white' : type === 'error' ? 'bg-rose-800 text-white' : 'bg-slate-800 text-amber-300';
+            toast.className = `${bg} px-4 py-3 rounded-lg shadow-2xl border border-amber-500/30 text-xs font-bold pointer-events-auto transition duration-300 transform translate-y-2`;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+
+        window.onload = function() {
+            app.init();
+        };
+    </script>
+</body>
+</html>
