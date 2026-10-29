@@ -1088,7 +1088,14 @@
                                                             <button onclick="app.rechazarUsuario('${u.id}')" class="px-2 py-1 bg-rose-600 text-white rounded font-bold hover:bg-rose-500 shadow">Rechazar</button>
                                                         </div>
                                                     ` : `
-                                                        <span class="text-[10px] text-slate-400 font-bold">Activo</span>
+                                                        ${!isJudge ? `
+                                                            <button onclick="app.renderDeleteUsuarioModal('${u.id}')" class="px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold rounded flex items-center space-x-1 mx-auto" title="Eliminar Usuario con Contraseña">
+                                                                <i data-lucide="user-x" class="w-3.5 h-3.5"></i>
+                                                                <span>Eliminar</span>
+                                                            </button>
+                                                        ` : `
+                                                            <span class="text-[10px] text-slate-400 font-bold">Inamovible</span>
+                                                        `}
                                                     `}
                                                 </td>
                                             </tr>
@@ -1107,6 +1114,79 @@
                 `;
 
                 openModal(content);
+            },
+
+            // --- ELIMINAR USUARIO CON VERIFICACIÓN DE CONTRASEÑA ---
+            renderDeleteUsuarioModal: function(userId) {
+                const targetUser = users.find(u => u.id === userId);
+                if (!targetUser) return;
+
+                if (targetUser.role === 'Juez') {
+                    showAlert('El usuario del Juez es inamovible y no puede ser eliminado.', 'error');
+                    return;
+                }
+
+                const content = `
+                    <div class="p-6 space-y-4">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-rose-700 flex items-center gap-2">
+                                <i data-lucide="user-x" class="w-5 h-5 text-rose-600"></i>
+                                Eliminar Servidor Público: ${targetUser.name}
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <p class="text-xs text-slate-700 font-medium">
+                            ¿Está seguro de eliminar de la plataforma al usuario <strong>${targetUser.name} (@${targetUser.username})</strong>? Se retirará su acceso de inmediato.
+                        </p>
+
+                        <div class="space-y-2">
+                            <label class="block text-xs font-bold text-slate-800">Ingrese su contraseña de ${currentUser.role} para autorizar la baja:</label>
+                            <input type="password" id="delete-user-password" placeholder="••••••••" 
+                                class="w-full p-2.5 border-2 border-rose-300 rounded-lg text-xs font-bold focus:ring-2 focus:ring-rose-500 focus:outline-none">
+                        </div>
+
+                        <div class="flex justify-end space-x-2 pt-3">
+                            <button onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 rounded font-bold text-xs">Cancelar</button>
+                            <button onclick="app.handleDeleteUsuario('${targetUser.id}')" class="px-4 py-1.5 bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs rounded shadow">Confirmar y Dar de Baja</button>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleDeleteUsuario: async function(userId) {
+                const passInput = (document.getElementById('delete-user-password')?.value || '').trim();
+
+                if (!passInput) {
+                    showAlert('Debe ingresar su contraseña para confirmar la eliminación del usuario.', 'error');
+                    return;
+                }
+
+                if (passInput !== currentUser.password) {
+                    showAlert('Contraseña incorrecta. Se canceló la baja del usuario por seguridad.', 'error');
+                    return;
+                }
+
+                const idx = users.findIndex(u => u.id === userId);
+                if (idx === -1) return;
+
+                const targetUser = users[idx];
+                users.splice(idx, 1);
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        const { doc, deleteDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                        await deleteDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users', userId));
+                    } catch (e) {
+                        console.warn("Error eliminando usuario en Firebase:", e);
+                    }
+                }
+
+                logAction(`Servidor público ${targetUser.name} (@${targetUser.username}) eliminado por ${currentUser.name} tras verificación de contraseña.`);
+                closeModal();
+                showAlert(`El servidor público ${targetUser.name} ha sido dado de baja.`, 'info');
+                this.renderAdminPanel();
             },
 
             // ACTIVAR O DESACTIVAR HABILIDADES/PERMISOS ESPECÍFICOS POR USUARIO
