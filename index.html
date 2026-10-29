@@ -17,14 +17,15 @@
         import { getFirestore, collection, doc, setDoc, getDocs, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // CONFIGURA AQUÍ TUS CLAVES DE FIREBASE (Obtenidas en console.firebase.google.com)
-        const firebaseConfig = window.__firebase_config ? JSON.parse(__firebase_config) : {
-            apiKey: "TU_API_KEY",
-            authDomain: "tu-proyecto.firebaseapp.com",
-            projectId: "tu-proyecto-id",
-            storageBucket: "tu-proyecto.appspot.com",
-            messagingSenderId: "123456789",
-            appId: "1:123456789:web:abcdef"
-        };
+        const firebaseConfig = {
+  apiKey: "AIzaSyDQ2DGf9ciVHyCtQsyIomIL4W9vuvpzvzI",
+  authDomain: "ponencia-tres.firebaseapp.com",
+  projectId: "ponencia-tres",
+  storageBucket: "ponencia-tres.firebasestorage.app",
+  messagingSenderId: "681670104943",
+  appId: "1:681670104943:web:9921ec8d2286b10c15fa9a",
+  measurementId: "G-60XL844Q8F"
+};
 
         // Inicializar Firebase
         try {
