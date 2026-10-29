@@ -11,6 +11,9 @@
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
+    <!-- EMAILJS SDK PARA ENVÍO DE CORREOS ELECTRÓNICOS REALES -->
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+
     <!-- FIREBASE SDKs PARA CONEXIÓN MULTI-USUARIO EN LA NUBE -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -38,21 +41,10 @@
             console.warn("Error al conectar Firebase. Operando en modo memoria/local.", e);
         }
     </script>
-
     <script>
         tailwind.config = {
             theme: {
                 extend: {
-                    colors: {
-                        durango: {
-                            silver: '#e2e8f0',
-                            platino: '#f8fafc',
-                            burgundy: '#800020',
-                            gold: '#c5a059',
-                            dark: '#0f172a',
-                            slate: '#334155'
-                        }
-                    },
                     fontFamily: {
                         sans: ['Inter', 'sans-serif'],
                         serif: ['Cinzel', 'serif']
@@ -186,6 +178,47 @@
         let auditLogs = JSON.parse(localStorage.getItem('tld_audit_logs')) || DEFAULT_AUDIT_LOGS;
         let currentUser = JSON.parse(localStorage.getItem('tld_current_user')) || null;
 
+        // CONFIGURACIÓN DE SERVICIO DE CORREO REAL (EMAILJS)
+        let emailJsConfig = JSON.parse(localStorage.getItem('tld_emailjs_config')) || {
+            publicKey: 'YOUR_PUBLIC_KEY',
+            serviceId: 'YOUR_SERVICE_ID',
+            templateId: 'YOUR_TEMPLATE_ID',
+            active: false
+        };
+
+        if (emailJsConfig.active && emailJsConfig.publicKey && emailJsConfig.publicKey !== 'YOUR_PUBLIC_KEY') {
+            try {
+                emailjs.init(emailJsConfig.publicKey);
+                console.log("EmailJS inicializado correctamente.");
+            } catch(e) { console.warn("Error al inicializar EmailJS:", e); }
+        }
+
+        // FUNCIÓN GLOBAL PARA ENVIAR CORREOS REALES
+        async function sendRealEmail(toEmail, toName, subject, codeOrMessage) {
+            if (!emailJsConfig.active || !emailJsConfig.publicKey || emailJsConfig.publicKey === 'YOUR_PUBLIC_KEY') {
+                console.log(`[Modo Simulación - Correo a ${toEmail}]: ${subject} - ${codeOrMessage}`);
+                return { success: true, simulated: true };
+            }
+
+            try {
+                const response = await emailjs.send(
+                    emailJsConfig.serviceId,
+                    emailJsConfig.templateId,
+                    {
+                        to_email: toEmail,
+                        to_name: toName,
+                        subject: subject,
+                        message: codeOrMessage,
+                        code: codeOrMessage
+                    }
+                );
+                return { success: true, response };
+            } catch (error) {
+                console.error("Error al enviar correo vía EmailJS:", error);
+                return { success: false, error };
+            }
+        }
+
         // GARANTIZAR QUE SIEMPRE EXISTAN Y ESTÉN ACTIVOS LOS USUARIOS BASE
         function ensureDefaultUsers() {
             if (!Array.isArray(users) || users.length === 0) {
@@ -232,11 +265,13 @@
             const newLog = {
                 id: 'log-' + Date.now(),
                 fecha: new Date().toLocaleString('es-MX'),
+                timestamp: Date.now(),
                 usuario: currentUser ? `${currentUser.name} (${currentUser.username})` : 'Sistema / Anónimo',
                 accion: actionDescription,
                 area: currentUser ? currentUser.area : 'N/A'
             };
             auditLogs.unshift(newLog);
+            cleanOldAuditLogs();
             saveState();
 
             // Sincronización en la nube si Firebase está activo
@@ -247,6 +282,16 @@
                     });
                 } catch(err) { console.error("Error sincronizando log en Firebase:", err); }
             }
+        }
+
+        // LIMPIEZA / DEPURACIÓN AUTOMÁTICA DE REGISTROS MAYORES A 1 AÑO (365 DÍAS)
+        function cleanOldAuditLogs() {
+            const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+            const now = Date.now();
+            auditLogs = auditLogs.filter(log => {
+                if (!log.timestamp) return true; // Mantener logs sin marca de tiempo para seguridad
+                return (now - log.timestamp) <= ONE_YEAR_MS;
+            });
         }
 
         // CÁLCULO DE DÍAS HÁBILES TRANSCURRIDOS (EXCLUYE SÁBADOS Y DOMINGOS)
@@ -378,7 +423,12 @@
                                 </div>
 
                                 <div>
-                                    <label class="font-bold text-slate-700 block mb-1">Contraseña:</label>
+                                    <div class="flex justify-between items-center mb-1">
+                                        <label class="font-bold text-slate-700">Contraseña:</label>
+                                        <button type="button" onclick="app.renderForgotPasswordModal()" class="text-[10px] text-amber-700 font-bold hover:underline">
+                                            ¿Olvidaste tu contraseña?
+                                        </button>
+                                    </div>
                                     <div class="relative">
                                         <i data-lucide="key-round" class="w-4 h-4 absolute left-3 top-2.5 text-slate-400"></i>
                                         <input type="password" id="login-password" required placeholder="••••••••" class="w-full pl-9 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 font-semibold text-slate-900">
@@ -390,10 +440,9 @@
                                 </button>
                             </form>
 
-                            <div class="border-t pt-4 text-center">
-                                <p class="text-slate-600 text-xs">¿Nuevo Servidor Público?</p>
-                                <button onclick="app.renderRegisterModal()" class="mt-1 text-xs font-bold text-amber-700 hover:underline">
-                                    Solicitar Registro de Usuario
+                            <div class="pt-3 border-t border-slate-200 text-center">
+                                <button onclick="app.renderRegisterModal()" class="text-xs font-bold text-slate-700 hover:text-amber-700">
+                                    ¿Nuevo servidor público? Solicitar alta aquí
                                 </button>
                             </div>
                         </div>
@@ -404,25 +453,182 @@
 
             handleLoginSubmit: function(e) {
                 e.preventDefault();
-                const un = document.getElementById('login-username').value.trim();
-                const pw = document.getElementById('login-password').value;
+                const usernameInput = document.getElementById('login-username').value.trim();
+                const passwordInput = document.getElementById('login-password').value;
 
-                const user = users.find(u => u && u.username && u.username.toLowerCase() === un.toLowerCase() && u.password === pw);
+                ensureDefaultUsers();
+
+                const user = users.find(u => u && u.username && u.username.toLowerCase() === usernameInput.toLowerCase());
 
                 if (!user) {
-                    showAlert('Usuario o contraseña incorrectos.', 'error');
+                    showAlert('El usuario ingresado no existe.', 'error');
+                    return;
+                }
+
+                if (user.password !== passwordInput) {
+                    showAlert('Contraseña incorrecta. Por favor intente nuevamente.', 'error');
                     return;
                 }
 
                 if (user.status !== 'Activo') {
-                    showAlert('Su cuenta aún no ha sido aprobada por el Administrador/Juez.', 'error');
+                    showAlert('Su cuenta aún no ha sido aprobada por el Administrador o Juez.', 'error');
                     return;
                 }
 
                 currentUser = user;
                 saveState();
-                logAction(`Inicio de sesión exitoso del usuario: ${user.name}`);
-                showAlert(`Bienvenido/a ${user.name}`, 'success');
+                logAction(`Inicio de sesión exitoso de ${user.name} (${user.role})`);
+                showAlert(`Bienvenido(a), ${user.name}`, 'success');
+                this.renderDashboard();
+            },
+
+            // --- RECUPERACIÓN DE CONTRASEÑA CON CÓDIGO TEMPORAL DE 15 MINUTOS ---
+            renderForgotPasswordModal: function() {
+                const content = `
+                    <div class="p-6 space-y-4 max-w-md w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="key" class="w-5 h-5 text-amber-600"></i>
+                                Recuperación de Contraseña
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <form onsubmit="app.handleSendRecoveryCode(event)" class="space-y-3 text-xs">
+                            <p class="text-slate-600 font-medium">
+                                Ingrese su correo electrónico o nombre de usuario registrado. Se le enviará una <strong>clave temporal de 6 dígitos con vigencia de 15 minutos</strong> para restablecer su acceso.
+                            </p>
+
+                            <div>
+                                <label class="font-bold text-slate-700 block mb-1">Correo Electrónico o Usuario:</label>
+                                <input type="text" id="recovery-identifier" required placeholder="correo@ejemplo.gob.mx o Admin" class="w-full p-2.5 border rounded-lg font-semibold text-slate-900 focus:ring-2 focus:ring-amber-500">
+                            </div>
+
+                            <div class="flex justify-end space-x-2 pt-2 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded shadow">Generar Clave Temporal</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleSendRecoveryCode: async function(e) {
+                e.preventDefault();
+                const idStr = document.getElementById('recovery-identifier').value.trim().toLowerCase();
+
+                const user = users.find(u => u && ((u.email && u.email.toLowerCase() === idStr) || (u.username && u.username.toLowerCase() === idStr)));
+
+                if (!user) {
+                    showAlert('No se encontró ningún servidor público con ese usuario o correo.', 'error');
+                    return;
+                }
+
+                // Generar código numérico de 6 dígitos con 15 min de vigencia (900,000 ms)
+                const tempCode = Math.floor(100000 + Math.random() * 900000).toString();
+                const expireTimestamp = Date.now() + 15 * 60 * 1000;
+
+                user.recoveryCode = tempCode;
+                user.recoveryExpire = expireTimestamp;
+                saveState();
+
+                logAction(`Solicitud de clave temporal de recuperación para ${user.name} (${user.username})`);
+
+                // Enviar correo real con EmailJS o Simulación
+                const emailResult = await sendRealEmail(
+                    user.email,
+                    user.name,
+                    'Código de Recuperación - Control de Expedientes Ponencia 3',
+                    `Su código de recuperación temporal es: ${tempCode}. Válido por 15 minutos.`
+                );
+
+                if (emailResult.success && !emailResult.simulated) {
+                    showAlert(`Correo enviado exitosamente a ${user.email}`, 'success');
+                }
+
+                this.renderValidateRecoveryCodeModal(user.id, user.email, tempCode, emailResult.simulated);
+            },
+
+            renderValidateRecoveryCodeModal: function(userId, userEmail, codeForNotice, isSimulated) {
+                const content = `
+                    <div class="p-6 space-y-4 max-w-md w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="shield-check" class="w-5 h-5 text-emerald-600"></i>
+                                Validar Clave Temporal
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs space-y-1 text-slate-800">
+                            <p class="font-bold text-amber-900">📧 ${isSimulated ? 'Simulación de Correo Remitido (Servicio Real Inactivo)' : 'Correo Electrónico Enviado Correctamente'}:</p>
+                            <p>Destinatario: <strong>${userEmail}</strong></p>
+                            ${isSimulated ? `<p class="text-xs">Clave de acceso en pantalla: <strong class="text-lg text-rose-700 bg-amber-100 px-2 py-0.5 rounded border border-rose-300 font-mono tracking-widest">${codeForNotice}</strong></p>` : '<p class="text-xs text-emerald-800 font-semibold">Revise su bandeja de entrada o spam para obtener la clave.</p>'}
+                            <p class="text-[10px] text-slate-500">⏱️ Válida por 15 minutos.</p>
+                        </div>
+
+                        <form onsubmit="app.handleVerifyRecoveryCode(event, '${userId}')" class="space-y-3 text-xs">
+                            <div>
+                                <label class="font-bold text-slate-700 block mb-1">Ingrese la Clave Temporal (6 dígitos):</label>
+                                <input type="text" id="verify-temp-code" required maxlength="6" placeholder="000000" class="w-full p-2.5 border rounded-lg font-mono text-center text-lg font-bold tracking-widest text-slate-900 focus:ring-2 focus:ring-amber-500">
+                            </div>
+
+                            <div>
+                                <label class="font-bold text-slate-700 block mb-1">Nueva Contraseña:</label>
+                                <input type="password" id="new-reset-password" required placeholder="••••••••" class="w-full p-2.5 border rounded-lg font-bold text-slate-900 focus:ring-2 focus:ring-amber-500">
+                            </div>
+
+                            <div class="flex justify-end space-x-2 pt-2 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-bold rounded shadow">Establecer Nueva Contraseña</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleVerifyRecoveryCode: async function(e, userId) {
+                e.preventDefault();
+                const codeInp = document.getElementById('verify-temp-code').value.trim();
+                const newPw = document.getElementById('new-reset-password').value;
+
+                const u = users.find(x => x.id === userId);
+                if (!u) {
+                    showAlert('Usuario no encontrado.', 'error');
+                    return;
+                }
+
+                if (!u.recoveryCode || u.recoveryCode !== codeInp) {
+                    showAlert('La clave temporal ingresada es incorrecta.', 'error');
+                    return;
+                }
+
+                if (Date.now() > u.recoveryExpire) {
+                    showAlert('La clave temporal ha expirado (límite de 15 minutos superado). Solicite una nueva.', 'error');
+                    return;
+                }
+
+                // Actualización exitosa de contraseña
+                u.password = newPw;
+                u.recoveryCode = null;
+                u.recoveryExpire = null;
+                saveState();
+
+                if (window.isFirebaseConfigured && window.db) {
+                    try {
+                        const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                        await setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'users', u.id), u);
+                    } catch(err) { console.error("Error al actualizar contraseña en Firebase:", err); }
+                }
+
+                logAction(`Restablecimiento de contraseña exitoso para ${u.name} (${u.username})`);
+                closeModal();
+                showAlert(`Contraseña de ${u.name} actualizada correctamente. Ya puede iniciar sesión.`, 'success');
+
+                currentUser = u;
+                saveState();
                 this.renderDashboard();
             },
 
@@ -664,6 +870,10 @@
                                 </div>
 
                                 ${isJuezOrAdmin ? `
+                                    <button onclick="app.renderEmailConfigModal()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold rounded-lg border border-amber-500/40 flex items-center gap-1" title="Configurar Servicio Real de Correo">
+                                        <i data-lucide="mail" class="w-3.5 h-3.5"></i>
+                                        <span>Config. Correo</span>
+                                    </button>
                                     <button onclick="app.renderAdminPanel()" class="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg shadow flex items-center gap-1">
                                         <i data-lucide="shield" class="w-3.5 h-3.5"></i>
                                         <span id="pending-users-badge">Aprobar Solicitudes (${pendingCount})</span>
@@ -1117,6 +1327,29 @@
                                 </div>
                             </div>
 
+                            <!-- MÓDULO DE VINCULACIÓN / DESVINCULACIÓN DE EXPEDIENTES -->
+                            <div class="p-3 bg-indigo-50 border border-indigo-200 rounded-lg space-y-2">
+                                <div class="flex justify-between items-center">
+                                    <label class="font-bold text-indigo-950 text-xs flex items-center gap-1.5">
+                                        <i data-lucide="link" class="w-4 h-4 text-indigo-600"></i>
+                                        Expediente Antecedente / Vinculado
+                                    </label>
+                                    ${exp.expedienteVinculado ? `
+                                        <label class="flex items-center gap-1 text-[11px] font-bold text-rose-700 cursor-pointer bg-rose-100 px-2 py-0.5 rounded border border-rose-300">
+                                            <input type="checkbox" id="edit-desvincular-check" onchange="app.toggleDesvincularCheck(this.checked)" class="rounded text-rose-600">
+                                            Desvincular Expediente (${exp.expedienteVinculado})
+                                        </label>
+                                    ` : ''}
+                                </div>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    <input type="text" id="edit-exp-vinculado" value="${exp.expedienteVinculado || ''}" placeholder="Número de Expediente Relacionado (Ej. 80/2025-P3)" class="p-2 border rounded text-xs bg-white w-full font-bold text-indigo-900">
+                                    <div class="text-[10px] text-slate-500 flex items-center">
+                                        <span>ℹ️ Desmarque o borre el número para desvincular el antecedente.</span>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- MÓDULO DE EDICIÓN DE JUICIO DE AMPARO -->
                             <div class="p-3 bg-purple-50 border border-purple-200 rounded-lg space-y-2">
                                 <h4 class="font-bold text-purple-900 text-xs">Registro y Control de Juicio de Amparo</h4>
@@ -1161,6 +1394,18 @@
                 openModal(content);
             },
 
+            toggleDesvincularCheck: function(shouldUnlink) {
+                const vincInput = document.getElementById('edit-exp-vinculado');
+                if (vincInput) {
+                    if (shouldUnlink) {
+                        vincInput.value = '';
+                        vincInput.disabled = true;
+                    } else {
+                        vincInput.disabled = false;
+                    }
+                }
+            },
+
             handleSaveEditExpediente: async function(e, expId) {
                 e.preventDefault();
                 const exp = expedientes.find(x => x.id === expId);
@@ -1171,11 +1416,30 @@
                 const actor = document.getElementById('edit-exp-actor').value.trim();
                 const demandado = document.getElementById('edit-exp-demandado').value.trim();
                 const tarea = document.getElementById('edit-exp-tarea').value.trim();
+                const nuevoVinculado = document.getElementById('edit-exp-vinculado').value.trim();
 
                 const ampTipo = document.getElementById('edit-amparo-tipo').value;
                 const ampNum = document.getElementById('edit-amparo-num').value.trim();
                 const ampVenc = document.getElementById('edit-amparo-vencimiento').value;
                 const ampOrgano = document.getElementById('edit-amparo-organo').value;
+
+                const anteriorVinculado = exp.expedienteVinculado;
+                const nowStr = new Date().toLocaleString('es-MX');
+                let cambiosAuditoria = [];
+
+                // DETECCIÓN DE CAMBIO / DESVINCULACIÓN DE EXPEDIENTE
+                if (anteriorVinculado && !nuevoVinculado) {
+                    exp.expedienteVinculado = null;
+                    cambiosAuditoria.push(`Desvinculación del expediente antecedente '${anteriorVinculado}'`);
+                } else if (nuevoVinculado !== anteriorVinculado) {
+                    exp.expedienteVinculado = nuevoVinculado;
+                    cambiosAuditoria.push(`Nueva vinculación con el expediente antecedente '${nuevoVinculado}'`);
+                }
+
+                if (exp.numero !== num) cambiosAuditoria.push(`Cambio de número: '${exp.numero}' -> '${num}'`);
+                if (exp.actor !== actor) cambiosAuditoria.push(`Modificación de Parte Actora`);
+                if (exp.demandado !== demandado) cambiosAuditoria.push(`Modificación de Parte Demandada`);
+                if (exp.juicio !== juicio) cambiosAuditoria.push(`Cambio de tipo de juicio: '${juicio}'`);
 
                 exp.numero = num;
                 exp.juicio = juicio;
@@ -1190,9 +1454,21 @@
                         fechaVencimiento: ampVenc || null,
                         organoJurisdiccional: ampOrgano
                     };
+                    cambiosAuditoria.push(`Actualización de Juicio de Amparo '${ampNum}' (${ampTipo})`);
                 } else {
                     exp.amparoData = null;
                 }
+
+                // REGISTRO EN HISTORIAL DEL EXPEDIENTE
+                if (!exp.historial) exp.historial = [];
+                const detalleCambios = cambiosAuditoria.length > 0 ? cambiosAuditoria.join(', ') : 'Modificación de expediente';
+                
+                exp.historial.unshift({
+                    fecha: nowStr,
+                    usuario: `${currentUser.name} (${currentUser.role})`,
+                    area: currentUser.area,
+                    accion: detalleCambios
+                });
 
                 saveState();
 
@@ -1200,18 +1476,18 @@
                     try {
                         const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
                         await setDoc(doc(window.db, 'artifacts', 'ponencia-3-prod', 'public', 'data', 'expedientes', exp.id), exp);
-                    } catch(err) { console.error("Error al actualizar expediente en Firebase:", err); }
+                    } catch(err) { console.error("Error al guardar edición en Firebase:", err); }
                 }
 
-                logAction(`Edición de datos del expediente ${num} realizada por ${currentUser.name}`);
+                logAction(`Edición realizada en expediente ${exp.numero} por ${currentUser.name}: ${detalleCambios}`);
                 closeModal();
-                showAlert(`Expediente ${num} actualizado correctamente.`, 'success');
+                showAlert(`Expediente ${exp.numero} actualizado exitosamente.`, 'success');
                 this.renderDashboard();
             },
 
-            // --- MÓDULO ESPECIAL DE AMPARO ---
+            // --- MÓDULO ESPECIAL DE CONTROL Y VENCIMIENTOS DE AMPARO ---
             renderAmparoModulo: function() {
-                const amparosList = expedientes.filter(e => e.amparoData && e.amparoData.numeroAmparo);
+                const expedientesAmparo = expedientes.filter(e => e.amparoData && e.amparoData.numeroAmparo);
 
                 const content = `
                     <div class="p-6 space-y-4 max-w-5xl w-full max-h-[92vh] overflow-y-auto">
@@ -1219,10 +1495,10 @@
                             <div>
                                 <h3 class="text-xl font-serif font-bold text-slate-900 flex items-center gap-2">
                                     <i data-lucide="scale" class="w-6 h-6 text-purple-700"></i>
-                                    Módulo Especial de Juicios de Amparo y Términos Fatales
+                                    Módulo Especial de Control y Vencimientos de Amparo
                                 </h3>
                                 <p class="text-xs text-slate-500 font-medium">
-                                    Supervisión de Amparos Directos e Indirectos (25° y 8° Circuito Judicial Federal)
+                                    Seguimiento de términos fatales de Amparo Directo e Indirecto del 25° y 8° Circuito
                                 </p>
                             </div>
                             <button onclick="closeModal()"><i data-lucide="x" class="w-6 h-6 text-slate-400"></i></button>
@@ -1232,51 +1508,59 @@
                             <table class="w-full text-left text-xs border-collapse">
                                 <thead class="bg-purple-950 text-purple-200 font-bold uppercase">
                                     <tr>
-                                        <th class="p-3">Expediente Origen</th>
-                                        <th class="p-3">Tipo / N° Amparo</th>
+                                        <th class="p-3">N° Expediente</th>
+                                        <th class="p-3">Datos del Amparo</th>
                                         <th class="p-3">Órgano Federal</th>
-                                        <th class="p-3">Vencimiento Término</th>
-                                        <th class="p-3">Estado de Urgencia</th>
-                                        <th class="p-3 text-right">Acción</th>
+                                        <th class="p-3">Término Fatal</th>
+                                        <th class="p-3 text-right">Acciones</th>
                                     </tr>
                                 </thead>
                                 <tbody class="divide-y divide-purple-100">
-                                    ${amparosList.length === 0 ? `
+                                    ${expedientesAmparo.length === 0 ? `
                                         <tr>
-                                            <td colspan="6" class="p-6 text-center text-slate-500 font-medium">
-                                                No hay juicios de amparo registrados actualmente.
+                                            <td colspan="5" class="p-6 text-center text-slate-500 font-medium">
+                                                No hay expedientes con Juicio de Amparo registrado actualmente.
                                             </td>
                                         </tr>
-                                    ` : amparosList.map(a => {
-                                        const amp = a.amparoData;
-                                        let vencLabel = amp.fechaVencimiento || 'Sin fecha definida';
-                                        let bgUrgencia = 'bg-slate-100 text-slate-800';
+                                    ` : expedientesAmparo.map(e => {
+                                        const amp = e.amparoData;
+                                        let urgenteClass = 'bg-slate-100 text-slate-700';
+                                        let labelTermino = amp.fechaVencimiento || 'Sin fecha asignada';
 
                                         if (amp.fechaVencimiento) {
-                                            const today = new Date().toISOString().substring(0,10);
-                                            if (amp.fechaVencimiento < today) {
-                                                bgUrgencia = 'bg-rose-100 text-rose-900 font-bold border-rose-300 animate-pulse';
-                                            } else if (amp.fechaVencimiento === today) {
-                                                bgUrgencia = 'bg-amber-100 text-amber-900 font-bold border-amber-300';
+                                            const hoy = new Date();
+                                            hoy.setHours(0,0,0,0);
+                                            const venc = new Date(amp.fechaVencimiento + 'T00:00:00');
+                                            const diffDays = Math.ceil((venc - hoy) / (1000 * 60 * 60 * 24));
+
+                                            if (diffDays < 0) {
+                                                urgenteClass = 'bg-rose-100 text-rose-900 font-bold border border-rose-300';
+                                                labelTermino += ` (VENCIDO hace ${Math.abs(diffDays)} días)`;
+                                            } else if (diffDays <= 3) {
+                                                urgenteClass = 'bg-amber-100 text-amber-900 font-bold border border-amber-300 animate-pulse';
+                                                labelTermino += ` (Por vencer: ${diffDays} días)`;
                                             } else {
-                                                bgUrgencia = 'bg-emerald-100 text-emerald-800 font-bold';
+                                                urgenteClass = 'bg-emerald-100 text-emerald-800 font-bold';
+                                                labelTermino += ` (${diffDays} días restantes)`;
                                             }
                                         }
 
                                         return `
                                             <tr class="hover:bg-purple-50/50">
-                                                <td class="p-3 font-bold text-slate-900">${a.numero}</td>
-                                                <td class="p-3 font-bold text-purple-900">${amp.tipoAmparo}<br><span class="text-xs text-purple-700">${amp.numeroAmparo}</span></td>
-                                                <td class="p-3 text-slate-700 font-medium">${amp.organoJurisdiccional}</td>
-                                                <td class="p-3 font-bold text-slate-900">${vencLabel}</td>
+                                                <td class="p-3 font-bold text-slate-900">${e.numero}</td>
                                                 <td class="p-3">
-                                                    <span class="px-2 py-0.5 rounded text-[10px] ${bgUrgencia}">
-                                                        ${amp.fechaVencimiento ? (amp.fechaVencimiento < new Date().toISOString().substring(0,10) ? 'VENCIDO / URGENTE' : 'EN TIEMPO') : 'Pendiente'}
+                                                    <div class="font-bold text-purple-900">${amp.numeroAmparo}</div>
+                                                    <span class="text-[10px] text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded font-bold">${amp.tipoAmparo}</span>
+                                                </td>
+                                                <td class="p-3 text-slate-700 font-medium">${amp.organoJurisdiccional}</td>
+                                                <td class="p-3">
+                                                    <span class="px-2 py-1 rounded text-[11px] block text-center ${urgenteClass}">
+                                                        ${labelTermino}
                                                     </span>
                                                 </td>
                                                 <td class="p-3 text-right">
-                                                    <button onclick="app.renderEditExpedienteModal('${a.id}')" class="px-2 py-1 bg-purple-800 text-white font-bold rounded text-[10px]">
-                                                        Editar Término
+                                                    <button onclick="app.renderEditExpedienteModal('${e.id}')" class="px-3 py-1 bg-purple-900 hover:bg-purple-800 text-white font-bold rounded text-xs shadow">
+                                                        Editar Amparo
                                                     </button>
                                                 </td>
                                             </tr>
@@ -1287,36 +1571,81 @@
                         </div>
 
                         <div class="flex justify-end pt-2 border-t">
-                            <button onclick="closeModal()" class="px-4 py-2 bg-slate-900 text-amber-400 font-bold text-xs rounded">Cerrar Módulo</button>
+                            <button onclick="closeModal()" class="px-4 py-2 bg-slate-900 text-purple-200 font-bold text-xs rounded">Cerrar Módulo</button>
                         </div>
                     </div>
                 `;
                 openModal(content);
             },
 
-            // --- BITÁCORA DE AUDITORÍA INDIVIDUALIZADA POR USUARIO ---
+            // --- BITÁCORA DE AUDITORÍA INDIVIDUALIZADA POR USUARIO Y DESCARGA MENSUAL ---
             renderAuditLogModal: function() {
+                const currentYear = new Date().getFullYear();
+                const currentMonth = new Date().getMonth() + 1;
+
+                const MESES = [
+                    { id: 1, name: 'Enero' },
+                    { id: 2, name: 'Febrero' },
+                    { id: 3, name: 'Marzo' },
+                    { id: 4, name: 'Abril' },
+                    { id: 5, name: 'Mayo' },
+                    { id: 6, name: 'Junio' },
+                    { id: 7, name: 'Julio' },
+                    { id: 8, name: 'Agosto' },
+                    { id: 9, name: 'Septiembre' },
+                    { id: 10, name: 'Octubre' },
+                    { id: 11, name: 'Noviembre' },
+                    { id: 12, name: 'Diciembre' }
+                ];
+
                 const content = `
                     <div class="p-6 space-y-4 max-w-5xl w-full max-h-[92vh] overflow-y-auto">
                         <div class="flex justify-between items-center border-b pb-3">
                             <div>
                                 <h3 class="text-xl font-serif font-bold text-slate-900 flex items-center gap-2">
                                     <i data-lucide="clipboard-list" class="w-6 h-6 text-amber-600"></i>
-                                    Bitácora de Auditoría e Historial de Actividades
+                                    Bitácora de Auditoría e Historial de Actividades (1 Año de Conservación)
                                 </h3>
                                 <p class="text-xs text-slate-500 font-medium">
-                                    Registro inalterable de operaciones realizadas por cada servidor público
+                                    Consulta y descarga de registros mensuales por servidor público
                                 </p>
                             </div>
                             <button onclick="closeModal()"><i data-lucide="x" class="w-6 h-6 text-slate-400"></i></button>
                         </div>
 
-                        <div class="flex justify-between items-center bg-slate-50 p-3 rounded-lg border">
-                            <label class="font-bold text-xs text-slate-700">Filtrar por Servidor Público:</label>
-                            <select id="audit-user-filter" onchange="app.filterAuditLogsByUser(this.value)" class="p-2 border rounded font-semibold text-xs text-slate-900 bg-white">
-                                <option value="ALL">-- Todos los Usuarios --</option>
-                                ${users.map(u => `<option value="${u.name}">${u.name} (@${u.username})</option>`).join('')}
-                            </select>
+                        <!-- BARRA DE FILTROS DESPLEGABLES: SERVIDOR PÚBLICO, MES Y AÑO -->
+                        <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                                <label class="font-bold text-xs text-slate-700 block mb-1">Servidor Público:</label>
+                                <select id="audit-user-filter" onchange="app.filterAuditLogs()" class="w-full p-2 border rounded font-semibold text-xs text-slate-900 bg-white">
+                                    <option value="ALL">-- Todos los Servidores --</option>
+                                    ${users.map(u => `<option value="${u.name}">${u.name} (@${u.username})</option>`).join('')}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="font-bold text-xs text-slate-700 block mb-1">Mes de Consulta:</label>
+                                <select id="audit-month-filter" onchange="app.filterAuditLogs()" class="w-full p-2 border rounded font-semibold text-xs text-slate-900 bg-white">
+                                    <option value="ALL">-- Todos los Meses --</option>
+                                    ${MESES.map(m => `<option value="${m.id}" ${m.id === currentMonth ? 'selected' : ''}>${m.name}</option>`).join('')}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="font-bold text-xs text-slate-700 block mb-1">Año de Consulta:</label>
+                                <select id="audit-year-filter" onchange="app.filterAuditLogs()" class="w-full p-2 border rounded font-semibold text-xs text-slate-900 bg-white">
+                                    <option value="${currentYear}">${currentYear}</option>
+                                    <option value="${currentYear - 1}">${currentYear - 1}</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between items-center pt-1">
+                            <span id="audit-count-badge" class="text-xs font-semibold text-slate-600">Mostrando ${auditLogs.length} actividades</span>
+                            <button onclick="app.downloadAuditLogsExcel()" class="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-lg shadow flex items-center gap-1.5">
+                                <i data-lucide="download" class="w-4 h-4"></i>
+                                <span>Descargar Bitácora Filtrada (.CSV)</span>
+                            </button>
                         </div>
 
                         <div class="border border-slate-200 rounded-xl overflow-hidden shadow bg-white">
@@ -1325,7 +1654,7 @@
                                     <tr>
                                         <th class="p-3">Fecha y Hora</th>
                                         <th class="p-3">Servidor Público</th>
-                                        <th class="p-3">Área</th>
+                                        <th class="p-3">Área Adscrita</th>
                                         <th class="p-3">Acción Registrada</th>
                                     </tr>
                                 </thead>
@@ -1341,6 +1670,7 @@
                     </div>
                 `;
                 openModal(content);
+                this.filterAuditLogs();
             },
 
             getAuditLogsRowsHtml: function(logs) {
@@ -1348,7 +1678,7 @@
                     return `
                         <tr>
                             <td colspan="4" class="p-6 text-center text-slate-500 font-medium">
-                                No hay registros de auditoría disponibles.
+                                No se encontraron registros de auditoría para el filtro seleccionado.
                             </td>
                         </tr>
                     `;
@@ -1364,15 +1694,80 @@
                 `).join('');
             },
 
-            filterAuditLogsByUser: function(selectedUser) {
-                const tbody = document.getElementById('audit-logs-table-body');
-                if (!tbody) return;
+            getFilteredAuditLogs: function() {
+                const userSel = document.getElementById('audit-user-filter')?.value || 'ALL';
+                const monthSel = document.getElementById('audit-month-filter')?.value || 'ALL';
+                const yearSel = document.getElementById('audit-year-filter')?.value || 'ALL';
 
-                if (selectedUser === 'ALL') {
-                    tbody.innerHTML = this.getAuditLogsRowsHtml(auditLogs);
-                } else {
-                    const filtered = auditLogs.filter(l => l.usuario && l.usuario.includes(selectedUser));
-                    tbody.innerHTML = this.getAuditLogsRowsHtml(filtered);
+                return auditLogs.filter(l => {
+                    // Filtro por Servidor Público
+                    if (userSel !== 'ALL' && (!l.usuario || !l.usuario.includes(userSel))) {
+                        return false;
+                    }
+
+                    // Parse fecha "DD/MM/YYYY" o ISO "YYYY-MM-DD"
+                    if (l.fecha) {
+                        const dateParts = l.fecha.split(',')[0].split('/');
+                        if (dateParts.length === 3) {
+                            const m = parseInt(dateParts[1], 10);
+                            const y = parseInt(dateParts[2], 10);
+
+                            if (monthSel !== 'ALL' && m !== parseInt(monthSel, 10)) return false;
+                            if (yearSel !== 'ALL' && y !== parseInt(yearSel, 10)) return false;
+                        }
+                    }
+                    return true;
+                });
+            },
+
+            filterAuditLogs: function() {
+                const filtered = this.getFilteredAuditLogs();
+                const tbody = document.getElementById('audit-logs-table-body');
+                const badge = document.getElementById('audit-count-badge');
+
+                if (tbody) tbody.innerHTML = this.getAuditLogsRowsHtml(filtered);
+                if (badge) badge.textContent = `Mostrando ${filtered.length} de ${auditLogs.length} actividades acumuladas`;
+            },
+
+            downloadAuditLogsExcel: function() {
+                try {
+                    const filtered = this.getFilteredAuditLogs();
+                    if (filtered.length === 0) {
+                        showAlert('No hay registros en la bitácora para exportar.', 'error');
+                        return;
+                    }
+
+                    const userSel = document.getElementById('audit-user-filter')?.value || 'Todos';
+                    const monthSel = document.getElementById('audit-month-filter')?.value || 'General';
+                    const yearSel = document.getElementById('audit-year-filter')?.value || 'Ano';
+
+                    let csvContent = "\uFEFF";
+                    csvContent += "Fecha_y_Hora,Servidor_Publico,Area_Adscrita,Accion_Registrada\n";
+
+                    filtered.forEach(l => {
+                        const cleanFecha = (l.fecha || '').replace(/"/g, '""');
+                        const cleanUser = (l.usuario || '').replace(/"/g, '""');
+                        const cleanArea = (l.area || '').replace(/"/g, '""');
+                        const cleanAccion = (l.accion || '').replace(/"/g, '""');
+
+                        csvContent += `"${cleanFecha}","${cleanUser}","${cleanArea}","${cleanAccion}"\n`;
+                    });
+
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", url);
+                    link.setAttribute("download", `Bitacora_Actividades_${monthSel}_${yearSel}.csv`);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+
+                    logAction(`Descarga de bitácora mensual efectuada por ${currentUser.name}`);
+                    showAlert('Bitácora mensual descargada con éxito.', 'success');
+                } catch(err) {
+                    console.error("Error al descargar bitácora:", err);
+                    showAlert('Error al descargar la bitácora.', 'error');
                 }
             },
 
@@ -1432,13 +1827,13 @@
                             </div>
 
                             <div>
-                                <label class="font-bold text-slate-700">Nota / Instrucción Genérica:</label>
-                                <textarea id="bulk-instruccion" rows="3" placeholder="Ej. Atender la integración de promociones recibidas en paquete..." required class="w-full p-2 border rounded font-sans"></textarea>
+                                <label class="font-bold text-slate-700">Instrucción / Nota Genérica para el Paquete:</label>
+                                <textarea id="bulk-instruccion" rows="3" required placeholder="Instrucciones para los expedientes seleccionados..." class="w-full p-2 border rounded font-sans"></textarea>
                             </div>
 
                             <div class="flex justify-end space-x-2 pt-2 border-t">
                                 <button type="button" onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold rounded">Cancelar</button>
-                                <button type="submit" class="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded shadow">Remitir Paquete Completo</button>
+                                <button type="submit" class="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded shadow">Turnar Paquete</button>
                             </div>
                         </form>
                     </div>
@@ -1449,23 +1844,24 @@
             handleBulkTurnoSubmit: async function(e) {
                 e.preventDefault();
                 const selectedIds = this.getSelectedExpedienteIds();
-                const destinoArea = document.getElementById('bulk-destino-area').value;
+                const destino = document.getElementById('bulk-destino-area').value;
                 const instruccion = document.getElementById('bulk-instruccion').value.trim();
                 const nowStr = new Date().toLocaleString('es-MX');
 
                 selectedIds.forEach(id => {
                     const exp = expedientes.find(x => x.id === id);
                     if (exp) {
-                        exp.areaActual = destinoArea;
+                        exp.areaActual = destino;
                         exp.estadoRecepcion = 'Pendiente_Aceptacion';
                         exp.fechaTurno = nowStr;
                         exp.tareaPendiente = instruccion;
+
                         if (!exp.historial) exp.historial = [];
                         exp.historial.unshift({
                             fecha: nowStr,
                             usuario: `${currentUser.name} (${currentUser.role})`,
-                            area: destinoArea,
-                            accion: `Turnado masivo en paquete a ${destinoArea}. Instrucción: ${instruccion}`
+                            area: destino,
+                            accion: `Turnado en paquete a ${destino}. Nota: ${instruccion}`
                         });
 
                         if (window.isFirebaseConfigured && window.db) {
@@ -1477,10 +1873,9 @@
                 });
 
                 saveState();
-                logAction(`Turnado masivo de ${selectedIds.length} expedientes hacia ${destinoArea}`);
+                logAction(`Turnado masivo de ${selectedIds.length} expedientes a ${destino} efectuado por ${currentUser.name}`);
                 closeModal();
-                this.deselectAllExpedientes();
-                showAlert(`Paquete de ${selectedIds.length} expedientes turnado con éxito a ${destinoArea}`, 'success');
+                showAlert(`Paquete de ${selectedIds.length} expedientes turnado a ${destino}`, 'success');
                 this.renderDashboard();
             },
 
@@ -1488,12 +1883,15 @@
                 const selectedIds = this.getSelectedExpedienteIds();
                 if (selectedIds.length === 0) return;
 
-                if (!confirm(`¿Está seguro de eliminar el paquete de ${selectedIds.length} expedientes seleccionados?`)) return;
+                const confirmPass = prompt(`Para eliminar permanentemente ${selectedIds.length} expedientes, ingrese su contraseña:`);
+                if (confirmPass !== currentUser.password) {
+                    showAlert('Contraseña incorrecta. Acción cancelada.', 'error');
+                    return;
+                }
 
                 selectedIds.forEach(id => {
                     const idx = expedientes.findIndex(x => x.id === id);
                     if (idx !== -1) {
-                        const exp = expedientes[idx];
                         expedientes.splice(idx, 1);
                         if (window.isFirebaseConfigured && window.db) {
                             import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ doc, deleteDoc }) => {
@@ -1504,10 +1902,88 @@
                 });
 
                 saveState();
-                logAction(`Eliminación masiva de ${selectedIds.length} expedientes efectuada por ${currentUser.name}`);
-                this.deselectAllExpedientes();
+                logAction(`Eliminación en paquete de ${selectedIds.length} expedientes efectuada por ${currentUser.name}`);
                 showAlert(`Se eliminaron ${selectedIds.length} expedientes del sistema.`, 'info');
                 this.renderDashboard();
+            },
+
+            // --- CONFIGURACIÓN DEL SERVICIO DE CORREO ELECTRÓNICO REAL (EMAILJS) ---
+            renderEmailConfigModal: function() {
+                const content = `
+                    <div class="p-6 space-y-4 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="mail" class="w-5 h-5 text-amber-600"></i>
+                                Configuración de Servicio Real de Correo
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <form onsubmit="app.handleSaveEmailConfig(event)" class="space-y-3 text-xs">
+                            <div class="p-3 bg-slate-100 rounded-lg space-y-1 text-slate-700">
+                                <p class="font-bold">Estado del servicio:</p>
+                                <label class="flex items-center gap-2 cursor-pointer font-bold text-slate-900">
+                                    <input type="checkbox" id="emailjs-active" ${emailJsConfig.active ? 'checked' : ''} class="w-4 h-4 text-amber-500 rounded">
+                                    <span>Activar Envío de Correos Reales (EmailJS)</span>
+                                </label>
+                            </div>
+
+                            <div>
+                                <label class="font-bold text-slate-700 block mb-1">Public Key (User ID):</label>
+                                <input type="text" id="emailjs-public-key" value="${emailJsConfig.publicKey || ''}" placeholder="Ej. user_xxxxxxxxx" class="w-full p-2 border rounded font-mono">
+                            </div>
+
+                            <div>
+                                <label class="font-bold text-slate-700 block mb-1">Service ID (Servidor de Correo):</label>
+                                <input type="text" id="emailjs-service-id" value="${emailJsConfig.serviceId || ''}" placeholder="Ej. service_gmail" class="w-full p-2 border rounded font-mono">
+                            </div>
+
+                            <div>
+                                <label class="font-bold text-slate-700 block mb-1">Template ID (Plantilla):</label>
+                                <input type="text" id="emailjs-template-id" value="${emailJsConfig.templateId || ''}" placeholder="Ej. template_recovery" class="w-full p-2 border rounded font-mono">
+                            </div>
+
+                            <div class="p-3 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1">
+                                <p class="font-bold">💡 Instrucciones de integración rápida:</p>
+                                <p>1. Crea una cuenta gratuita en <a href="https://www.emailjs.com" target="_blank" class="underline font-bold text-amber-800">EmailJS.com</a> (200 correos/mes gratis).</p>
+                                <p>2. Conecta tu proveedor de correo (Gmail, Outlook, etc.) en "Email Services".</p>
+                                <p>3. Crea una plantilla en "Email Templates" con los parámetros <code>{{to_email}}</code>, <code>{{to_name}}</code>, <code>{{subject}}</code> y <code>{{code}}</code>.</p>
+                                <p>4. Pega aquí tus llaves y activa el servicio.</p>
+                            </div>
+
+                            <div class="flex justify-end space-x-2 pt-2 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded shadow">Guardar Credenciales</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleSaveEmailConfig: function(e) {
+                e.preventDefault();
+                const active = document.getElementById('emailjs-active').checked;
+                const publicKey = document.getElementById('emailjs-public-key').value.trim();
+                const serviceId = document.getElementById('emailjs-service-id').value.trim();
+                const templateId = document.getElementById('emailjs-template-id').value.trim();
+
+                emailJsConfig = { active, publicKey, serviceId, templateId };
+                localStorage.setItem('tld_emailjs_config', JSON.stringify(emailJsConfig));
+
+                if (active && publicKey) {
+                    try {
+                        emailjs.init(publicKey);
+                        showAlert('Configuración de correo real guardada e inicializada.', 'success');
+                    } catch(err) {
+                        showAlert('Error al inicializar EmailJS. Verifique la Public Key.', 'error');
+                    }
+                } else {
+                    showAlert('Configuración guardada (Modo simulación activo).', 'info');
+                }
+
+                logAction(`Configuración de servicio de correo actualizada por ${currentUser.name}`);
+                closeModal();
             },
 
             // --- DEVOLUCIÓN O RECHAZO DE EXPEDIENTES POR TURNO ERRÓNEO ---
