@@ -1,0 +1,1879 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Control de Expedientes - Ponencia Tres</title>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Configuration setup
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "",
+            authDomain: "",
+            projectId: "default-project",
+            storageBucket: "",
+            messagingSenderId: "",
+            appId: ""
+        };
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tb-ponencia3-app';
+
+        let appFirebase = null;
+        let db = null;
+        let auth = null;
+
+        if (firebaseConfig.projectId && firebaseConfig.projectId !== "default-project") {
+            try {
+                appFirebase = initializeApp(firebaseConfig);
+                db = getFirestore(appFirebase);
+                auth = getAuth(appFirebase);
+
+                // Authentication init
+                const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                if (token) {
+                    await signInWithCustomToken(auth, token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Attach Firebase reference to window for global access
+                window.firebaseDb = db;
+                window.firebaseAuth = auth;
+                window.firebaseAppId = appId;
+                window.firestoreCollections = {
+                    publicData: (coll) => collection(db, 'artifacts', appId, 'public', 'data', coll),
+                    publicDoc: (coll, id) => doc(db, 'artifacts', appId, 'public', 'data', coll, id)
+                };
+
+                console.log("Firebase initialized successfully.");
+            } catch (err) {
+                console.warn("Firebase initialization skipped or failed, falling back to local storage:", err);
+            }
+        }
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,400&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+            color: #1e293b;
+        }
+
+        .font-serif {
+            font-family: 'Playfair Display', Georgia, serif;
+        }
+
+        .silver-gradient {
+            background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 50%, #94a3b8 100%);
+        }
+
+        .silver-header-gradient {
+            background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+            border-bottom: 2px solid #64748b;
+        }
+
+        .silver-card-border {
+            border: 1px solid #cbd5e1;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        }
+
+        .silver-badge {
+            background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+            color: #334155;
+            border: 1px solid #cbd5e1;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #94a3b8;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 min-h-screen text-slate-800 antialiased selection:bg-slate-700 selection:text-white">
+
+    <!-- App Main Container -->
+    <div id="app" class="min-h-screen flex flex-col">
+        <!-- Dynamic Content Rendered Here -->
+    </div>
+
+    <!-- Global Modal Container -->
+    <div id="modal" class="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-2 sm:p-4">
+        <div id="modal-content" class="bg-white rounded-xl shadow-2xl border border-slate-300 max-w-4xl w-full max-h-[92vh] overflow-y-auto transform transition-all">
+            <!-- Modal Body injected via JS -->
+        </div>
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-md w-full px-4 pointer-events-none"></div>
+
+    <script>
+        function openModal(content) {
+            const modal = document.getElementById('modal');
+            const modalContent = document.getElementById('modal-content');
+            modalContent.innerHTML = content;
+            modal.classList.remove('hidden');
+            if (window.lucide) lucide.createIcons();
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('modal');
+            modal.classList.add('hidden');
+        }
+
+        function showAlert(msg, type = 'info') {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+
+            const bgColors = {
+                success: 'bg-emerald-600 text-white border-emerald-500',
+                danger: 'bg-rose-600 text-white border-rose-500',
+                warning: 'bg-amber-500 text-slate-950 border-amber-400 font-semibold',
+                info: 'bg-slate-800 text-slate-100 border-slate-600'
+            };
+
+            const icons = {
+                success: 'check-circle-2',
+                danger: 'alert-triangle',
+                warning: 'alert-circle',
+                info: 'info'
+            };
+
+            const toast = document.createElement('div');
+            toast.className = `p-3 rounded-lg shadow-xl border ${bgColors[type] || bgColors.info} text-xs flex items-center justify-between gap-3 transform transition-all duration-300 translate-y-2 opacity-0 pointer-events-auto`;
+            toast.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i data-lucide="${icons[type] || 'info'}" class="w-4 h-4 shrink-0"></i>
+                    <span>${msg}</span>
+                </div>
+                <button onclick="this.parentElement.remove()" class="text-xs opacity-70 hover:opacity-100 p-1"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
+            `;
+
+            container.appendChild(toast);
+            if (window.lucide) lucide.createIcons();
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            }, 10);
+
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.remove();
+                }
+            }, 4000);
+        }
+
+        const app = {
+            currentUser: null,
+            activeTab: 'dashboard',
+            expedientes: [],
+            reportesEntrega: [],
+            users: [],
+            auditLogs: [],
+            organosJurisdiccionales: [],
+            emailConfig: {
+                active: false,
+                publicKey: '',
+                serviceId: '',
+                templateId: ''
+            },
+
+            init: function() {
+                this.loadDefaultUsers();
+                this.loadInitialData();
+                this.initFirebaseSync();
+                const session = localStorage.getItem('tb_session');
+                if (session) {
+                    this.currentUser = JSON.parse(session);
+                    this.renderDashboard();
+                } else {
+                    this.renderLogin();
+                }
+            },
+
+            initFirebaseSync: function() {
+                // Setup live listeners if Firebase DB is active
+                if (window.firebaseDb && window.firestoreCollections) {
+                    try {
+                        const { onSnapshot } = window;
+                        // Listen to expedientes collection in real-time
+                        const expCol = window.firestoreCollections.publicData('expedientes');
+                        import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ onSnapshot }) => {
+                            onSnapshot(expCol, (snapshot) => {
+                                if (!snapshot.empty) {
+                                    const remoteExps = [];
+                                    snapshot.forEach(doc => remoteExps.push({ id: doc.id, ...doc.data() }));
+                                    if (remoteExps.length > 0) {
+                                        this.expedientes = remoteExps;
+                                        localStorage.setItem('tb_expedientes', JSON.stringify(this.expedientes));
+                                        if (this.activeTab === 'dashboard') this.filterExpedientesTable();
+                                    }
+                                }
+                            }, (err) => console.warn("Firestore Expedientes sync notice:", err));
+                        });
+                    } catch(e) {
+                        console.warn("Realtime listener setup exception:", e);
+                    }
+                }
+            },
+
+            loadDefaultUsers: function() {
+                const storedUsers = localStorage.getItem('tb_users');
+                if (storedUsers) {
+                    this.users = JSON.parse(storedUsers);
+                } else {
+                    this.users = [
+                        { id: 'usr-admin', username: 'Admin', passwordHash: '662666', name: 'Administrador General', role: 'Administrador General', status: 'aprobado' },
+                        { id: 'usr-juez', username: 'Juez3', passwordHash: '123', name: 'Lic. Juez Ponencia 3', role: 'Juez de Ponencia', status: 'aprobado' }
+                    ];
+                    localStorage.setItem('tb_users', JSON.stringify(this.users));
+                }
+
+                const admin = this.users.find(u => u.username === 'Admin');
+                if (admin) admin.passwordHash = '662666';
+                const juez = this.users.find(u => u.username === 'Juez3');
+                if (juez) juez.passwordHash = '123';
+                localStorage.setItem('tb_users', JSON.stringify(this.users));
+            },
+
+            loadInitialData: function() {
+                this.expedientes = JSON.parse(localStorage.getItem('tb_expedientes')) || [
+                    {
+                        id: 'exp-1',
+                        prefix: 'TLB',
+                        consecutivo: '001',
+                        anio: '2026',
+                        numero: 'TLB/001/2026',
+                        actorNombre: 'José',
+                        actorPaterno: 'Martínez',
+                        actorMaterno: 'Gómez',
+                        actor: 'José Martínez Gómez',
+                        demandado: 'Secretaría de Educación del Estado de Durango',
+                        juicio: 'Ordinario Burocrático',
+                        tarea: 'Pendiente Contestación de Demanda',
+                        encargado: 'Secretaría de Acuerdos',
+                        fechaRegistro: '15/01/2026 10:30',
+                        historial: []
+                    }
+                ];
+
+                this.reportesEntrega = JSON.parse(localStorage.getItem('tb_reportes_entrega')) || [];
+                this.auditLogs = JSON.parse(localStorage.getItem('tb_audit_logs')) || [];
+                this.emailConfig = JSON.parse(localStorage.getItem('tb_email_config')) || { active: false, publicKey: '', serviceId: '', templateId: '' };
+
+                // Load custom jurisdictional organs (Laguna & 25th Circuit Courts)
+                this.organosJurisdiccionales = JSON.parse(localStorage.getItem('tb_organos_jurisdiccionales')) || [
+                    { id: 'org-1', nombre: 'Primer Tribunal Colegiado del 25° Circuito (Durango)', circuito: '25° Circuito - Durango', tipo: 'Tribunal Colegiado de Circuito' },
+                    { id: 'org-2', nombre: 'Segundo Tribunal Colegiado del 25° Circuito (Durango)', circuito: '25° Circuito - Durango', tipo: 'Tribunal Colegiado de Circuito' },
+                    { id: 'org-3', nombre: 'Tribunal Colegiado de Circuito de la Laguna (Gómez Palacio / Torreón)', circuito: 'Circuito de La Laguna', tipo: 'Tribunal Colegiado de Circuito' },
+                    { id: 'org-4', nombre: 'Juzgado de Distrito en la Comarca Lagunera', circuito: 'Circuito de La Laguna', tipo: 'Juzgado de Distrito' }
+                ];
+
+                if (this.emailConfig.active && this.emailConfig.publicKey && window.emailjs) {
+                    try { emailjs.init(this.emailConfig.publicKey); } catch(e) {}
+                }
+            },
+
+            logAudit: function(accion, detalles) {
+                const user = this.currentUser || { name: 'Sistema', role: 'General' };
+                const log = {
+                    id: 'log-' + Date.now().toString(36),
+                    fecha: new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX'),
+                    usuario: user.name,
+                    role: user.role,
+                    accion,
+                    detalles
+                };
+                this.auditLogs.unshift(log);
+                localStorage.setItem('tb_audit_logs', JSON.stringify(this.auditLogs));
+            },
+
+            setTab: function(tab) {
+                this.activeTab = tab;
+                this.renderDashboard();
+            },
+
+            renderNewExpedienteModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-2xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="plus-circle" class="w-5 h-5 text-slate-800"></i>
+                                Registro de Nuevo Expediente
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <form onsubmit="app.handleNewExpedienteSubmit(event)" class="space-y-4">
+                            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                <label class="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">1. Identificación del Expediente (Prefijo y Consecutivo)</label>
+                                ${this.renderCasePrefixSelector('TLB', '', new Date().getFullYear())}
+                            </div>
+
+                            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                                <label class="block text-xs font-bold text-slate-800 uppercase tracking-wider">2. Datos de la Parte Actora y Antecedentes</label>
+                                ${this.renderParteActoraInputs()}
+                                
+                                <div class="pt-2">
+                                    <label class="block text-[11px] text-slate-600 mb-0.5">Expediente Antecedente Vinculado (Opcional)</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="exp_vinculado" class="w-full text-xs p-2 border border-slate-300 rounded font-mono bg-white" placeholder="Ej. TLB/050/2024">
+                                        <label class="flex items-center gap-1 text-[11px] text-rose-700 whitespace-nowrap cursor-pointer">
+                                            <input type="checkbox" id="chk_desvincular" class="rounded text-rose-600">
+                                            <span>Desvincular</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-800 mb-1">Parte Demandada / Autoridad</label>
+                                    <input type="text" id="exp_demandado" class="w-full text-xs p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-500" placeholder="Ej. Secretaría de Finanzas del Estado" required>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-800 mb-1">Tipo de Juicio / Vía</label>
+                                    <select id="exp_juicio_tipo" class="w-full text-xs p-2 border border-slate-300 rounded bg-white font-medium">
+                                        <option value="Ordinario Burocrático">Ordinario Burocrático (TLB)</option>
+                                        <option value="Procedimiento Especial">Procedimiento Especial (PE)</option>
+                                        <option value="Convenio Conciliatorio">Convenio Conciliatorio (CONVENIO)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-800 mb-1">Tarea / Etapa Inicial</label>
+                                    <input type="text" id="exp_tarea" value="Recibido en Turno" class="w-full text-xs p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-500" required>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-800 mb-1">Mesa / Encargado Inicial</label>
+                                    <select id="exp_encargado" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                                        <option value="Mesa de Entrada / Oficialía de Partes">Mesa de Entrada / Oficialía de Partes</option>
+                                        <option value="Secretaría de Acuerdos">Secretaría de Acuerdos</option>
+                                        <option value="Secretaría Proyectista / Estudio y Cuenta">Secretaría Proyectista / Estudio y Cuenta</option>
+                                        <option value="Mesa de Dictamen / Proyectos">Mesa de Dictamen / Proyectos</option>
+                                        <option value="Actuaría / Notificaciones">Actuaría / Notificaciones</option>
+                                        <option value="Mesa de Conciliación y Convenios">Mesa de Conciliación y Convenios</option>
+                                        <option value="Archivo y Resguardo Procesal">Archivo y Resguardo Procesal</option>
+                                        <option value="Juzgado de Distrito / Trámite de Amparo">Tramitación de Amparos</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Amparo Directo/Indirecto Registration with Laguna & 2 Courts Config -->
+                            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                                <label class="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider cursor-pointer">
+                                    <input type="checkbox" id="chk_has_amparo" onchange="document.getElementById('amparo_fields_container').classList.toggle('hidden', !this.checked)" class="rounded text-slate-800">
+                                    <span>4. Registrar Amparo Vinculado (Opcional)</span>
+                                </label>
+
+                                <div id="amparo_fields_container" class="hidden space-y-2 pt-2 border-t border-slate-200">
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <div>
+                                            <label class="block text-[11px] text-slate-600 mb-0.5">Tipo de Amparo</label>
+                                            <select id="amp_tipo" class="w-full text-xs p-1.5 border border-slate-300 rounded bg-white">
+                                                <option value="Directo">Amparo Directo (Tribunal Colegiado de Circuito)</option>
+                                                <option value="Indirecto">Amparo Indirecto (Juzgado de Distrito / Apelación)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-[11px] text-slate-600 mb-0.5">Órgano Jurisdiccional Federal</label>
+                                            <select id="amp_juzgado" class="w-full text-xs p-1.5 border border-slate-300 rounded bg-white">
+                                                ${this.organosJurisdiccionales.map(o => `<option value="${o.nombre}">${o.nombre}</option>`).join('')}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-[11px] text-slate-600 mb-0.5">N° de Amparo</label>
+                                            <input type="text" id="amp_numero" class="w-full text-xs p-1.5 border border-slate-300 rounded font-mono" placeholder="Ej. 161/2026">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[11px] text-slate-600 mb-0.5 font-bold text-rose-800">Plazo Fatal de Término</label>
+                                            <input type="date" id="amp_fecha_fatal" class="w-full text-xs p-1.5 border border-slate-300 rounded font-semibold bg-rose-50">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="flex justify-end gap-2 pt-2 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-2 text-xs font-semibold bg-slate-800 text-white rounded hover:bg-slate-700 shadow flex items-center gap-1.5">
+                                    <i data-lucide="check" class="w-4 h-4"></i> Guardar y Registrar Expediente
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleNewExpedienteSubmit: function(e) {
+                e.preventDefault();
+                const prefix = document.getElementById('exp_prefix').value;
+                const consecutivo = document.getElementById('exp_consecutivo').value.trim();
+                const anio = document.getElementById('exp_anio').value;
+
+                const fullNumber = `${prefix}/${consecutivo.padStart(3, '0')}/${anio}`;
+
+                if (this.expedientes.some(exp => exp.numero === fullNumber)) {
+                    showAlert(`El número de expediente ${fullNumber} ya se encuentra registrado.`, 'danger');
+                    return;
+                }
+
+                const actorNombre = document.getElementById('actor_nombre').value.trim();
+                const actorPaterno = document.getElementById('actor_paterno').value.trim();
+                const actorMaterno = document.getElementById('actor_materno').value.trim();
+                const fullActor = `${actorNombre} ${actorPaterno} ${actorMaterno}`.trim();
+
+                const demandado = document.getElementById('exp_demandado').value.trim();
+                const juicio = document.getElementById('exp_juicio_tipo').value;
+                const tarea = document.getElementById('exp_tarea').value.trim();
+                const encargado = document.getElementById('exp_encargado').value;
+
+                let vinculado = document.getElementById('exp_vinculado').value.trim();
+                const desvincular = document.getElementById('chk_desvincular').checked;
+
+                if (desvincular) {
+                    vinculado = '';
+                }
+
+                let amparoData = null;
+                if (document.getElementById('chk_has_amparo').checked) {
+                    amparoData = {
+                        tipo: document.getElementById('amp_tipo').value,
+                        juzgado: document.getElementById('amp_juzgado').value,
+                        numeroAmparo: document.getElementById('amp_numero').value.trim(),
+                        fechaTerminoFatal: document.getElementById('amp_fecha_fatal').value
+                    };
+                }
+
+                const nowStr = new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX');
+
+                const newExp = {
+                    id: 'exp-' + Date.now().toString(36),
+                    prefix,
+                    consecutivo,
+                    anio,
+                    numero: fullNumber,
+                    actorNombre,
+                    actorPaterno,
+                    actorMaterno,
+                    actor: fullActor,
+                    demandado,
+                    juicio,
+                    tarea,
+                    encargado,
+                    fechaRegistro: nowStr,
+                    expedienteVinculado: vinculado,
+                    amparo: amparoData,
+                    historial: [
+                        {
+                            fecha: nowStr,
+                            usuario: this.currentUser ? this.currentUser.name : 'Admin',
+                            area: encargado,
+                            accion: `Registro del expediente con prefijo ${prefix}.${desvincular ? ' (Se desvinculó antecedente explícitamente)' : ''}`
+                        }
+                    ]
+                };
+
+                this.expedientes.unshift(newExp);
+                localStorage.setItem('tb_expedientes', JSON.stringify(this.expedientes));
+
+                // Sync to Firestore if available
+                if (window.firebaseDb && window.firestoreCollections) {
+                    import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ setDoc }) => {
+                        const docRef = window.firestoreCollections.publicDoc('expedientes', newExp.id);
+                        setDoc(docRef, newExp).catch(err => console.warn("Firestore save fallback:", err));
+                    });
+                }
+
+                this.logAudit('Registro Expediente', `Alta del expediente ${fullNumber} - ${fullActor}`);
+
+                showAlert(`Expediente ${fullNumber} registrado exitosamente.`, 'success');
+                closeModal();
+                this.renderDashboard();
+            },
+
+            renderLogin: function() {
+                const container = document.getElementById('app');
+                container.innerHTML = `
+                    <div class="min-h-screen flex items-center justify-center p-4 bg-slate-950 relative overflow-hidden">
+                        <div class="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none">
+                            <i data-lucide="scale" class="w-[600px] h-[600px] text-slate-100"></i>
+                        </div>
+
+                        <div class="max-w-md w-full bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-6 sm:p-8 relative z-10 space-y-6">
+                            <div class="text-center space-y-2 border-b border-slate-800 pb-5">
+                                <div class="inline-flex p-3 rounded-2xl bg-slate-800 border border-slate-600 shadow-inner">
+                                    <i data-lucide="landmark" class="w-10 h-10 text-slate-200"></i>
+                                </div>
+                                <h1 class="text-xl sm:text-2xl font-serif font-bold text-slate-100 tracking-tight">
+                                    Tribunal Laboral Burocrático
+                                </h1>
+                                <p class="text-xs uppercase tracking-widest font-semibold text-slate-400">
+                                    Estado de Durango | Ponencia Tres
+                                </p>
+                            </div>
+
+                            <form onsubmit="app.handleLoginSubmit(event)" class="space-y-4">
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">Servidor Público / Usuario</label>
+                                    <div class="relative">
+                                        <i data-lucide="user" class="w-4 h-4 absolute left-3 top-3 text-slate-400"></i>
+                                        <input type="text" id="login_user" class="w-full text-xs pl-9 pr-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400" placeholder="Ej. Admin o Juez3" required>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">Contraseña de Acceso</label>
+                                    <div class="relative">
+                                        <i data-lucide="lock" class="w-4 h-4 absolute left-3 top-3 text-slate-400"></i>
+                                        <input type="password" id="login_pass" class="w-full text-xs pl-9 pr-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400" placeholder="••••••••" required>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center justify-between text-xs text-slate-400">
+                                    <button type="button" onclick="app.renderForgotPasswordModal()" class="hover:text-slate-200 underline">
+                                        ¿Olvidaste tu contraseña?
+                                    </button>
+                                </div>
+
+                                <button type="submit" class="w-full py-2.5 bg-gradient-to-r from-slate-700 via-slate-600 to-slate-700 hover:from-slate-600 hover:to-slate-500 text-white font-semibold text-xs rounded-lg shadow-lg border border-slate-500 transition-all flex items-center justify-center gap-2">
+                                    <i data-lucide="key-round" class="w-4 h-4"></i> Iniciar Sesión en Sistema
+                                </button>
+                            </form>
+
+                            <div class="pt-4 border-t border-slate-800 text-center space-y-2">
+                                <button type="button" onclick="app.renderRegisterModal()" class="text-xs text-slate-400 hover:text-slate-200">
+                                    ¿Nuevo Servidor Público? <span class="font-bold underline text-slate-300">Solicitar Registro de Usuario</span>
+                                </button>
+                                <p class="text-[10px] text-slate-500">Credenciales por defecto: <strong>Admin</strong> (662666) | <strong>Juez3</strong> (123)</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                if (window.lucide) lucide.createIcons();
+            },
+
+            handleLoginSubmit: function(e) {
+                e.preventDefault();
+                const uInput = document.getElementById('login_user').value.trim();
+                const pInput = document.getElementById('login_pass').value.trim();
+
+                const user = this.users.find(u => u.username.toLowerCase() === uInput.toLowerCase());
+
+                if (!user) {
+                    showAlert('El nombre de usuario especificado no existe.', 'danger');
+                    return;
+                }
+
+                if (user.status === 'pendiente') {
+                    showAlert('Su cuenta aún está pendiente de aprobación por el Administrador General.', 'warning');
+                    return;
+                }
+
+                if (user.status === 'rechazado') {
+                    showAlert('Su solicitud de acceso ha sido rechazada por la administración.', 'danger');
+                    return;
+                }
+
+                if (user.passwordHash !== pInput) {
+                    showAlert('Contraseña de acceso incorrecta.', 'danger');
+                    return;
+                }
+
+                this.currentUser = user;
+                localStorage.setItem('tb_session', JSON.stringify(user));
+                this.logAudit('Inicio de Sesión', `Acceso exitoso al sistema.`);
+                showAlert(`Bienvenido/a, ${user.name}`, 'success');
+                this.renderDashboard();
+            },
+
+            logout: function() {
+                if (this.currentUser) {
+                    this.logAudit('Cierre de Sesión', 'Cierre voluntario de sesión.');
+                }
+                this.currentUser = null;
+                localStorage.removeItem('tb_session');
+                this.renderLogin();
+            },
+
+            renderCasePrefixSelector: function(selectedPrefix = 'TLB', selectedNum = '', selectedYear = new Date().getFullYear()) {
+                const years = [];
+                const currentYr = new Date().getFullYear();
+                for (let y = currentYr; y >= 2020; y--) years.push(y);
+
+                return `
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">Procedimiento</label>
+                            <select id="exp_prefix" class="w-full text-xs p-2 border border-slate-300 rounded-md focus:ring-1 focus:ring-slate-500 font-semibold bg-slate-50">
+                                <option value="TLB" ${selectedPrefix === 'TLB' ? 'selected' : ''}>TLB (Ordinario Burocrático)</option>
+                                <option value="PE" ${selectedPrefix === 'PE' ? 'selected' : ''}>PE (Procedimiento Especial)</option>
+                                <option value="CONVENIO" ${selectedPrefix === 'CONVENIO' ? 'selected' : ''}>CONVENIO (Procedimiento Convenio)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">Consecutivo</label>
+                            <input type="number" id="exp_consecutivo" value="${selectedNum}" min="1" max="9999" placeholder="Ej. 104" class="w-full text-xs p-2 border border-slate-300 rounded-md focus:ring-1 focus:ring-slate-500 font-mono" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">Año</label>
+                            <select id="exp_anio" class="w-full text-xs p-2 border border-slate-300 rounded-md focus:ring-1 focus:ring-slate-500 font-mono bg-slate-50">
+                                ${years.map(y => `<option value="${y}" ${selectedYear == y ? 'selected' : ''}>${y}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                `;
+            },
+
+            renderParteActoraInputs: function(defaultNombre = '', defaultPaterno = '', defaultMaterno = '') {
+                return `
+                    <div class="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                        <label class="block text-xs font-bold text-slate-800 uppercase tracking-wider">Parte Actora (Sujeto Procesal)</label>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <div>
+                                <label class="block text-[11px] text-slate-600 mb-0.5">Nombre(s)</label>
+                                <input type="text" id="actor_nombre" value="${defaultNombre}" oninput="app.updateActorNameAndSearch()" class="w-full text-xs p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-500" placeholder="Ej. Juan Manuel" required>
+                            </div>
+                            <div>
+                                <label class="block text-[11px] text-slate-600 mb-0.5">Apellido Paterno</label>
+                                <input type="text" id="actor_paterno" value="${defaultPaterno}" oninput="app.updateActorNameAndSearch()" class="w-full text-xs p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-500" placeholder="Ej. Hernández">
+                            </div>
+                            <div>
+                                <label class="block text-[11px] text-slate-600 mb-0.5">Apellido Materno</label>
+                                <input type="text" id="actor_materno" value="${defaultMaterno}" oninput="app.updateActorNameAndSearch()" class="w-full text-xs p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-500" placeholder="Ej. Pérez">
+                            </div>
+                        </div>
+
+                        <div id="live_antecedents_panel" class="hidden pt-2 border-t border-slate-200">
+                            <p class="text-[11px] font-bold text-amber-800 flex items-center gap-1 mb-1">
+                                <i data-lucide="search" class="w-3.5 h-3.5"></i> Posibles Antecedentes / Coincidencias en Base de Datos:
+                            </p>
+                            <div id="live_antecedents_list" class="max-h-28 overflow-y-auto divide-y divide-slate-200 text-[11px] bg-white border rounded"></div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            updateActorNameAndSearch: function() {
+                const nombre = document.getElementById('actor_nombre')?.value.trim() || '';
+                const paterno = document.getElementById('actor_paterno')?.value.trim() || '';
+                const materno = document.getElementById('actor_materno')?.value.trim() || '';
+
+                const searchTerms = `${nombre} ${paterno} ${materno}`.trim().toLowerCase();
+                const panel = document.getElementById('live_antecedents_panel');
+                const list = document.getElementById('live_antecedents_list');
+
+                if (searchTerms.length < 3) {
+                    if (panel) panel.classList.add('hidden');
+                    return;
+                }
+
+                const matches = this.expedientes.filter(e => {
+                    const fullActor = (e.actor || `${e.actorNombre || ''} ${e.actorPaterno || ''} ${e.actorMaterno || ''}`).toLowerCase();
+                    return fullActor.includes(searchTerms) || (paterno && fullActor.includes(paterno.toLowerCase()));
+                });
+
+                if (matches.length > 0) {
+                    panel.classList.remove('hidden');
+                    list.innerHTML = matches.map(m => `
+                        <div class="p-1.5 flex items-center justify-between hover:bg-slate-50">
+                            <div>
+                                <span class="font-bold text-slate-900">${m.numero}</span> - 
+                                <span class="text-slate-700">${m.actor}</span>
+                                <span class="text-slate-500 text-[10px]">(${m.demandado})</span>
+                            </div>
+                            <button type="button" onclick="app.setLinkedExpediente('${m.numero}')" class="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded font-semibold text-[10px]">
+                                Vincular A Este
+                            </button>
+                        </div>
+                    `).join('');
+                } else {
+                    panel.classList.add('hidden');
+                }
+            },
+
+            setLinkedExpediente: function(expNum) {
+                const input = document.getElementById('exp_vinculado');
+                const chkUnlink = document.getElementById('chk_desvincular');
+                if (input) input.value = expNum;
+                if (chkUnlink) chkUnlink.checked = false;
+                showAlert(`Expediente antecedente ${expNum} seleccionado para vinculación.`, 'info');
+            },
+
+            renderDashboard: function() {
+                const container = document.getElementById('app');
+                const currentUser = this.currentUser;
+
+                container.innerHTML = `
+                    <header class="silver-header-gradient text-slate-100 shadow-xl sticky top-0 z-30">
+                        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col sm:flex-row justify-between items-center gap-3">
+                            <div class="flex items-center gap-3">
+                                <div class="p-2 bg-slate-800 border border-slate-600 rounded-xl shadow-inner">
+                                    <i data-lucide="landmark" class="w-6 h-6 text-slate-300"></i>
+                                </div>
+                                <div>
+                                    <h1 class="text-base sm:text-lg font-serif font-bold text-slate-100">
+                                        Tribunal Laboral Burocrático | Ponencia Tres
+                                    </h1>
+                                    <p class="text-[11px] text-slate-400">Control Digital y Gestión de Expedientes</p>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center gap-2 text-xs">
+                                <div class="silver-badge px-3 py-1.5 rounded-lg flex items-center gap-2">
+                                    <i data-lucide="user" class="w-3.5 h-3.5 text-slate-600"></i>
+                                    <span class="font-semibold">${currentUser.name}</span>
+                                    <span class="text-[10px] text-slate-500 font-mono">(${currentUser.role})</span>
+                                </div>
+
+                                ${(currentUser.role === 'Admin' || currentUser.role === 'Juez' || currentUser.role === 'Administrador General' || currentUser.role === 'Juez de Ponencia') ? `
+                                    <button onclick="app.renderEmailConfigModal()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-lg transition-all flex items-center gap-1">
+                                        <i data-lucide="mail" class="w-3.5 h-3.5"></i> Config. Correo
+                                    </button>
+                                    <button onclick="app.renderAuditLogModal()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-lg transition-all flex items-center gap-1">
+                                        <i data-lucide="history" class="w-3.5 h-3.5"></i> Bitácora
+                                    </button>
+                                ` : ''}
+
+                                ${(currentUser.role === 'Admin' || currentUser.role === 'Administrador General') ? `
+                                    <button onclick="app.renderAdminPanel()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-lg transition-all flex items-center gap-1">
+                                        <i data-lucide="shield" class="w-3.5 h-3.5"></i> Usuarios
+                                    </button>
+                                ` : ''}
+
+                                <button onclick="app.logout()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-rose-900 text-slate-300 hover:text-white border border-slate-600 rounded-lg transition-all flex items-center gap-1">
+                                    <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Salir
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-4">
+                        <div class="bg-white p-2 rounded-xl border border-slate-200 shadow-sm flex items-center gap-2 overflow-x-auto text-xs font-medium">
+                            <button onclick="app.setTab('dashboard')" class="px-3 py-2 rounded-lg flex items-center gap-1.5 whitespace-nowrap transition-all ${this.activeTab === 'dashboard' ? 'bg-slate-800 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'}">
+                                <i data-lucide="layout-dashboard" class="w-4 h-4"></i> Expedientes (${this.expedientes.length})
+                            </button>
+                            <button onclick="app.setTab('amparo')" class="px-3 py-2 rounded-lg flex items-center gap-1.5 whitespace-nowrap transition-all ${this.activeTab === 'amparo' ? 'bg-slate-800 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'}">
+                                <i data-lucide="shield-alert" class="w-4 h-4 text-rose-500"></i> Módulo Amparo (2 TCC / Laguna)
+                            </button>
+                            <button onclick="app.setTab('reportes_entrega')" class="px-3 py-2 rounded-lg flex items-center gap-1.5 whitespace-nowrap transition-all ${this.activeTab === 'reportes_entrega' ? 'bg-slate-800 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'}">
+                                <i data-lucide="file-check-2" class="w-4 h-4 text-emerald-500"></i> Reportes de Entrega (${this.reportesEntrega.length})
+                            </button>
+                            <button onclick="app.renderFirmaDigitalModal()" class="px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-100 flex items-center gap-1.5 whitespace-nowrap transition-all">
+                                <i data-lucide="pen-tool" class="w-4 h-4 text-amber-600"></i> Mi Firma Digital
+                            </button>
+                            <button onclick="app.renderAnalisisProcedimientosModal()" class="px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-100 flex items-center gap-1.5 whitespace-nowrap transition-all">
+                                <i data-lucide="scale" class="w-4 h-4 text-slate-700"></i> Análisis Legal LOPJF
+                            </button>
+                        </div>
+
+                        ${this.activeTab === 'dashboard' ? this.renderExpedientesView() : ''}
+                        ${this.activeTab === 'amparo' ? this.renderAmparoView() : ''}
+                        ${this.activeTab === 'reportes_entrega' ? this.renderReportesEntregaView() : ''}
+                    </main>
+
+                    <footer class="bg-slate-950 border-t border-slate-800 text-slate-500 text-[11px] py-4 text-center">
+                        <p>© 2026 Tribunal Laboral Burocrático de Durango - Ponencia Tres. Configuración con Ley Orgánica del Poder Judicial de la Federación.</p>
+                    </footer>
+                `;
+                if (window.lucide) lucide.createIcons();
+            },
+
+            renderExpedientesView: function() {
+                return `
+                    <div class="space-y-4">
+                        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <div class="relative w-full sm:w-80">
+                                <i data-lucide="search" class="w-4 h-4 absolute left-3 top-2.5 text-slate-400"></i>
+                                <input type="text" id="search_exp_input" oninput="app.filterExpedientesTable()" class="w-full text-xs pl-9 pr-3 py-2 border border-slate-300 rounded-lg bg-slate-50 focus:ring-1 focus:ring-slate-500" placeholder="Buscar por número, actor, demandado...">
+                            </div>
+
+                            <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                                <button onclick="app.renderNewExpedienteModal()" class="px-3 py-2 text-xs font-semibold bg-slate-800 text-white rounded-lg hover:bg-slate-700 flex items-center gap-1.5 shadow-sm">
+                                    <i data-lucide="plus-circle" class="w-4 h-4"></i> Registrar Expediente
+                                </button>
+                                <button onclick="app.renderBulkAcceptModal()" class="px-3 py-2 text-xs font-semibold bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 flex items-center gap-1.5 shadow-sm">
+                                    <i data-lucide="check-check" class="w-4 h-4"></i> Entregar Selección
+                                </button>
+                                <button onclick="app.downloadExcelReport()" class="px-3 py-2 text-xs font-semibold bg-slate-700 text-white rounded-lg hover:bg-slate-800 flex items-center gap-1.5 shadow-sm">
+                                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Exportar Excel
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse text-xs">
+                                    <thead>
+                                        <tr class="bg-slate-100 border-b border-slate-200 text-slate-700 font-semibold uppercase tracking-wider text-[11px]">
+                                            <th class="p-3">
+                                                <input type="checkbox" onchange="app.toggleSelectAll(this)" class="rounded text-slate-700 focus:ring-slate-500">
+                                            </th>
+                                            <th class="p-3">Expediente</th>
+                                            <th class="p-3">Parte Actora</th>
+                                            <th class="p-3">Demandado</th>
+                                            <th class="p-3">Juicio</th>
+                                            <th class="p-3">Etapa / Tarea</th>
+                                            <th class="p-3">Encargado</th>
+                                            <th class="p-3 text-right">Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="expedientes_tbody" class="divide-y divide-slate-200">
+                                        ${this.getExpedientesTableRowsHtml()}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            getExpedientesTableRowsHtml: function(filteredExps = null) {
+                const list = filteredExps || this.expedientes;
+                if (list.length === 0) {
+                    return `
+                        <tr>
+                            <td colspan="8" class="p-8 text-center text-slate-400">
+                                No se encontraron expedientes registrados.
+                            </td>
+                        </tr>
+                    `;
+                }
+
+                return list.map(e => `
+                    <tr class="hover:bg-slate-50 transition-colors">
+                        <td class="p-3">
+                            <input type="checkbox" value="${e.id}" class="exp_chk rounded text-slate-700 focus:ring-slate-500">
+                        </td>
+                        <td class="p-3 font-mono font-bold text-slate-900">
+                            ${e.numero}
+                            ${e.expedienteVinculado ? `<br><span class="text-[10px] text-indigo-700 font-normal">Vinc: ${e.expedienteVinculado}</span>` : ''}
+                        </td>
+                        <td class="p-3 font-medium text-slate-800">${e.actor}</td>
+                        <td class="p-3 text-slate-600">${e.demandado}</td>
+                        <td class="p-3 text-slate-600">${e.juicio}</td>
+                        <td class="p-3">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-800 border border-slate-300">
+                                ${e.tarea}
+                            </span>
+                        </td>
+                        <td class="p-3 text-slate-600">${e.encargado}</td>
+                        <td class="p-3 text-right space-x-1">
+                            <button onclick="app.renderAcceptPackageModal(['${e.id}'])" class="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded" title="Aceptar y Firmar Recibido">
+                                <i data-lucide="file-check" class="w-4 h-4"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+            },
+
+            filterExpedientesTable: function() {
+                const query = document.getElementById('search_exp_input')?.value.toLowerCase().trim();
+                if (!query) {
+                    document.getElementById('expedientes_tbody').innerHTML = this.getExpedientesTableRowsHtml();
+                } else {
+                    const filtered = this.expedientes.filter(e => 
+                        e.numero.toLowerCase().includes(query) ||
+                        e.actor.toLowerCase().includes(query) ||
+                        e.demandado.toLowerCase().includes(query) ||
+                        e.juicio.toLowerCase().includes(query)
+                    );
+                    document.getElementById('expedientes_tbody').innerHTML = this.getExpedientesTableRowsHtml(filtered);
+                }
+                if (window.lucide) lucide.createIcons();
+            },
+
+            toggleSelectAll: function(master) {
+                const checkboxes = document.querySelectorAll('.exp_chk');
+                checkboxes.forEach(c => c.checked = master.checked);
+            },
+
+            renderBulkAcceptModal: function() {
+                const selected = Array.from(document.querySelectorAll('.exp_chk:checked')).map(c => c.value);
+                if (selected.length === 0) {
+                    showAlert('Seleccione al menos un expediente de la lista.', 'warning');
+                    return;
+                }
+                this.renderAcceptPackageModal(selected);
+            },
+
+            renderAcceptPackageModal: function(expIds = []) {
+                const exps = this.expedientes.filter(e => expIds.includes(e.id));
+                const user = this.currentUser;
+
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-3xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="file-signature" class="w-5 h-5 text-slate-800"></i>
+                                Contrato Digital de Responsabilidad y Checklist de Recepción
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="p-3 bg-slate-100 border border-slate-300 rounded-lg text-xs space-y-2 text-slate-800">
+                            <h4 class="font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1">
+                                <i data-lucide="shield-check" class="w-4 h-4 text-emerald-700"></i> Cláusula Digital de Responsabilidad y Custodia
+                            </h4>
+                            <p class="leading-relaxed">
+                                El/La servidor/a público/a <strong>${user.name}</strong> (${user.role}), al hacer clic en <strong>"Aceptar y Firmar Conformidad"</strong>, manifiesta bajo protesta de decir verdad que asume la custodia física, jurídica y el resguardo oficial de los paquetes/expedientes listados a continuación. Dicha aceptación mediante clic produce los mismos efectos jurídicos que la firma autógrafa de conformidad con el marco regulatorio del Tribunal.
+                            </p>
+                        </div>
+
+                        <div class="space-y-1">
+                            <label class="block text-xs font-bold text-slate-800">Paquetes / Expedientes a Recibir (${exps.length})</label>
+                            <div class="max-h-32 overflow-y-auto border rounded divide-y divide-slate-200 text-xs bg-slate-50">
+                                ${exps.map(e => `
+                                    <div class="p-2 flex justify-between items-center">
+                                        <div>
+                                            <span class="font-bold text-slate-900 font-mono">${e.numero}</span> - 
+                                            <span class="text-slate-700">${e.actor}</span>
+                                        </div>
+                                        <span class="text-[10px] px-2 py-0.5 bg-slate-200 rounded font-semibold text-slate-700">${e.juicio}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <div class="p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2 text-xs">
+                            <h4 class="font-bold text-amber-900 flex items-center gap-1">
+                                <i data-lucide="clipboard-check" class="w-4 h-4 text-amber-700"></i> Checklist Físico Previo a la Entrega
+                            </h4>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-800">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" id="chk_folios" checked class="rounded text-slate-800">
+                                    <span>Foliado completo y sellado</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" id="chk_anexos" checked class="rounded text-slate-800">
+                                    <span>Anexos y documentos originales presentes</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" id="chk_estado" checked class="rounded text-slate-800">
+                                    <span>Estado físico íntegro del expediente</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" id="chk_amparos" checked class="rounded text-slate-800">
+                                    <span>Cuadernos de amparo integrados (si aplica)</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="p-3 border rounded-lg bg-slate-50 border-slate-300 space-y-2 text-xs">
+                            <div class="flex justify-between items-center">
+                                <h4 class="font-bold text-slate-900 flex items-center gap-1">
+                                    <i data-lucide="pen-tool" class="w-4 h-4 text-slate-700"></i> Firma Digital Pre-Autorizada
+                                </h4>
+                                <span class="text-[10px] text-emerald-700 font-bold flex items-center gap-1">
+                                    <i data-lucide="check-circle-2" class="w-3 h-3"></i> Documento Pre-Aprobado Registrado
+                                </span>
+                            </div>
+                            <p class="text-slate-600">Se estampará el sello digital de custodia vinculado a su usuario oficial.</p>
+                        </div>
+
+                        <div class="flex justify-end gap-2 pt-3 border-t">
+                            <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded">Cancelar</button>
+                            <button type="button" onclick="app.processAcceptPackageSubmit(['${expIds.join("','")}'])" class="px-4 py-2 text-xs font-semibold bg-emerald-700 text-white rounded hover:bg-emerald-800 shadow flex items-center gap-1.5">
+                                <i data-lucide="check-circle" class="w-4 h-4"></i> Aceptar y Firmar Conformidad
+                            </button>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            processAcceptPackageSubmit: function(expIds) {
+                const exps = this.expedientes.filter(e => expIds.includes(e.id));
+                const user = this.currentUser;
+                const nowStr = new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX');
+
+                const reportRecord = {
+                    id: 'REP-' + Date.now().toString(36),
+                    fecha: nowStr,
+                    servidorPublico: user.name,
+                    cargo: user.role,
+                    expedientes: exps.map(e => ({ numero: e.numero, juicio: e.juicio, actor: e.actor })),
+                    checklist: {
+                        folios: document.getElementById('chk_folios')?.checked || true,
+                        anexos: document.getElementById('chk_anexos')?.checked || true,
+                        estado: document.getElementById('chk_estado')?.checked || true,
+                        amparos: document.getElementById('chk_amparos')?.checked || true
+                    },
+                    firmaDigitalHash: 'SHA256-' + Math.random().toString(36).substring(2, 12).toUpperCase()
+                };
+
+                this.reportesEntrega.unshift(reportRecord);
+                localStorage.setItem('tb_reportes_entrega', JSON.stringify(this.reportesEntrega));
+
+                exps.forEach(e => {
+                    e.encargado = user.role;
+                    e.tarea = 'Recibido en Custodia';
+                    e.historial = e.historial || [];
+                    e.historial.push({
+                        fecha: nowStr,
+                        usuario: user.name,
+                        area: user.role,
+                        accion: `Aceptación de custodia mediante firma digital. Reporte N° ${reportRecord.id}`
+                    });
+                });
+
+                localStorage.setItem('tb_expedientes', JSON.stringify(this.expedientes));
+                this.logAudit('Aceptación Paquete', `Firma de recepción de ${exps.length} expedientes. Reporte ${reportRecord.id}`);
+
+                closeModal();
+                showAlert(`Paquete aceptado exitosamente. Se generó el Reporte ${reportRecord.id}`, 'success');
+                this.renderDashboard();
+            },
+
+            // Updated Amparo View with 2 Circuit Courts & Laguna Jurisdiction Manual Addition
+            renderAmparoView: function() {
+                const amparos = this.expedientes.filter(e => e.amparo);
+                return `
+                    <div class="space-y-4">
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                            <div>
+                                <h2 class="text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                    <i data-lucide="shield-alert" class="w-5 h-5 text-rose-600"></i>
+                                    Módulo de Control de Amparos y Plazos Fatales
+                                </h2>
+                                <p class="text-xs text-slate-500">
+                                    Jurisdicción: 2 Tribunales Colegiados de Circuito (25° Circuito - Durango) y Órganos de La Laguna (LOPJF)
+                                </p>
+                            </div>
+                            <button onclick="app.renderManageOrganosModal()" class="px-3 py-2 text-xs font-semibold bg-slate-800 text-white rounded-lg hover:bg-slate-700 flex items-center gap-1.5 shadow-sm">
+                                <i data-lucide="plus" class="w-4 h-4"></i> Administrar Catálogo de Órganos Federales
+                            </button>
+                        </div>
+
+                        <!-- Circuit Courts Summary Badge Banner -->
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div class="p-3 bg-slate-800 text-white rounded-xl border border-slate-700">
+                                <p class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">1er Tribunal Colegiado (25° Circuito)</p>
+                                <p class="text-base font-bold font-serif">Durango, Dgo.</p>
+                                <p class="text-[10px] text-slate-300 mt-1">Competencia en Amparo Directo Laboral Burocrático</p>
+                            </div>
+                            <div class="p-3 bg-slate-800 text-white rounded-xl border border-slate-700">
+                                <p class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">2do Tribunal Colegiado (25° Circuito)</p>
+                                <p class="text-base font-bold font-serif">Durango, Dgo.</p>
+                                <p class="text-[10px] text-slate-300 mt-1">Competencia en Amparo Directo Laboral Burocrático</p>
+                            </div>
+                            <div class="p-3 bg-indigo-900 text-white rounded-xl border border-indigo-700">
+                                <p class="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold">Circuitos de La Laguna</p>
+                                <p class="text-base font-bold font-serif">Gómez Palacio / Torreón</p>
+                                <p class="text-[10px] text-indigo-200 mt-1">Órganos Jurisdiccionales de la Región Lagunera</p>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse text-xs min-w-[640px]">
+                                    <thead>
+                                        <tr class="bg-slate-100 border-b border-slate-200 text-slate-700 font-semibold uppercase text-[11px]">
+                                            <th class="p-3">Expediente Origen</th>
+                                            <th class="p-3">Tipo Amparo</th>
+                                            <th class="p-3">Órgano / Tribunal Colegiado</th>
+                                            <th class="p-3">N° Amparo</th>
+                                            <th class="p-3">Plazo Fatal</th>
+                                            <th class="p-3 text-right">Estatus Término</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-200">
+                                        ${amparos.length === 0 ? `
+                                            <tr>
+                                                <td colspan="6" class="p-8 text-center text-slate-400">
+                                                    No hay amparos registrados actualmente.
+                                                </td>
+                                            </tr>
+                                        ` : amparos.map(a => `
+                                            <tr class="hover:bg-slate-50">
+                                                <td class="p-3 font-mono font-bold text-slate-900">${a.numero}</td>
+                                                <td class="p-3 font-semibold">${a.amparo.tipo}</td>
+                                                <td class="p-3 text-slate-700">${a.amparo.juzgado || 'Tribunal Colegiado de Circuito'}</td>
+                                                <td class="p-3 font-mono">${a.amparo.numeroAmparo || 'N/A'}</td>
+                                                <td class="p-3 font-semibold text-rose-800">${a.amparo.fechaTerminoFatal || 'Sin Fecha'}</td>
+                                                <td class="p-3 text-right">
+                                                    <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                                                        EN PLAZO
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            // Modal to Add Custom Jurisdictional Bodies (Laguna & Additional Circuit Courts)
+            renderManageOrganosModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="building-2" class="w-5 h-5 text-slate-700"></i>
+                                Catálogo de Órganos Jurisdiccionales (25° Circuito y La Laguna)
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <!-- Manual Add Form -->
+                        <form onsubmit="app.handleAddOrganoSubmit(event)" class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-3 text-xs">
+                            <h4 class="font-bold text-slate-800 uppercase tracking-wider">Agregar Nuevo Órgano Jurisdiccional</h4>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <div class="sm:col-span-2">
+                                    <label class="block font-semibold text-slate-700 mb-0.5">Nombre del Órgano / Tribunal</label>
+                                    <input type="text" id="org_nombre_input" class="w-full p-2 border border-slate-300 rounded" placeholder="Ej. Tercer Tribunal Colegiado de la Laguna (Gómez Palacio)" required>
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-slate-700 mb-0.5">Circuito / Adscripción Territorial</label>
+                                    <select id="org_circuito_input" class="w-full p-2 border border-slate-300 rounded bg-white font-medium">
+                                        <option value="25° Circuito - Durango">25° Circuito - Durango</option>
+                                        <option value="Circuito de La Laguna">Circuito de La Laguna (Gómez Palacio / Torreón)</option>
+                                        <option value="Otro Circuito Federal">Otro Circuito Federal</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-slate-700 mb-0.5">Tipo de Órgano</label>
+                                    <select id="org_tipo_input" class="w-full p-2 border border-slate-300 rounded bg-white font-medium">
+                                        <option value="Tribunal Colegiado de Circuito">Tribunal Colegiado de Circuito</option>
+                                        <option value="Tribunal Colegiado de Apelación">Tribunal Colegiado de Apelación</option>
+                                        <option value="Juzgado de Distrito">Juzgado de Distrito</option>
+                                        <option value="Pleno Regional">Pleno Regional</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <button type="submit" class="px-3 py-1.5 bg-slate-800 text-white rounded font-semibold hover:bg-slate-700">
+                                Registrar Órgano Jurisdiccional
+                            </button>
+                        </form>
+
+                        <!-- Existing Catalogue List -->
+                        <div class="space-y-2 text-xs">
+                            <h4 class="font-bold text-slate-800 uppercase tracking-wider">Órganos Jurisdiccionales Registrados (${this.organosJurisdiccionales.length})</h4>
+                            <div class="divide-y divide-slate-200 border rounded-lg bg-white overflow-hidden max-h-52 overflow-y-auto">
+                                ${this.organosJurisdiccionales.map(o => `
+                                    <div class="p-2.5 flex justify-between items-center">
+                                        <div>
+                                            <p class="font-bold text-slate-900">${o.nombre}</p>
+                                            <p class="text-slate-500 text-[10px]">${o.circuito} • <span class="font-semibold text-slate-700">${o.tipo}</span></p>
+                                        </div>
+                                        <button type="button" onclick="app.removeOrgano('${o.id}')" class="text-rose-600 hover:text-rose-800 p-1" title="Eliminar">
+                                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                        </button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleAddOrganoSubmit: function(e) {
+                e.preventDefault();
+                const nombre = document.getElementById('org_nombre_input').value.trim();
+                const circuito = document.getElementById('org_circuito_input').value;
+                const tipo = document.getElementById('org_tipo_input').value;
+
+                const newOrg = {
+                    id: 'org-' + Date.now().toString(36),
+                    nombre,
+                    circuito,
+                    tipo
+                };
+
+                this.organosJurisdiccionales.push(newOrg);
+                localStorage.setItem('tb_organos_jurisdiccionales', JSON.stringify(this.organosJurisdiccionales));
+                this.logAudit('Alta Órgano Jurisdiccional', `Registro manual de ${nombre} (${circuito})`);
+
+                showAlert('Órgano jurisdiccional registrado exitosamente.', 'success');
+                this.renderManageOrganosModal();
+            },
+
+            removeOrgano: function(orgId) {
+                this.organosJurisdiccionales = this.organosJurisdiccionales.filter(o => o.id !== orgId);
+                localStorage.setItem('tb_organos_jurisdiccionales', JSON.stringify(this.organosJurisdiccionales));
+                showAlert('Órgano eliminado del catálogo.', 'info');
+                this.renderManageOrganosModal();
+            },
+
+            renderReportesEntregaView: function() {
+                return `
+                    <div class="space-y-4">
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                            <div>
+                                <h2 class="text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                    <i data-lucide="file-check-2" class="w-5 h-5 text-emerald-600"></i>
+                                    Repositorio de Reportes de Entrega y Recepción
+                                </h2>
+                                <p class="text-xs text-slate-500">Consulta de actas de recepción con firma digital y checklist físico</p>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse text-xs">
+                                    <thead>
+                                        <tr class="bg-slate-100 border-b border-slate-200 text-slate-700 font-semibold uppercase text-[11px]">
+                                            <th class="p-3">Folio Reporte</th>
+                                            <th class="p-3">Fecha y Hora</th>
+                                            <th class="p-3">Servidor Receptor</th>
+                                            <th class="p-3">Cant. Expedientes</th>
+                                            <th class="p-3">Firma Digital</th>
+                                            <th class="p-3 text-right">Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-200">
+                                        ${this.reportesEntrega.length === 0 ? `
+                                            <tr>
+                                                <td colspan="6" class="p-8 text-center text-slate-400">
+                                                    No hay reportes de entrega firmados aún.
+                                                </td>
+                                            </tr>
+                                        ` : this.reportesEntrega.map(r => `
+                                            <tr class="hover:bg-slate-50">
+                                                <td class="p-3 font-mono font-bold text-slate-900">${r.id}</td>
+                                                <td class="p-3 text-slate-600">${r.fecha}</td>
+                                                <td class="p-3 font-semibold text-slate-800">${r.servidorPublico} <span class="text-[10px] text-slate-500 font-normal">(${r.cargo})</span></td>
+                                                <td class="p-3 font-bold">${r.expedientes ? r.expedientes.length : 0}</td>
+                                                <td class="p-3 font-mono text-[10px] text-emerald-800">${r.firmaDigitalHash || 'SHA256-VALID'}</td>
+                                                <td class="p-3 text-right">
+                                                    <button onclick="app.downloadReportPDF('${r.id}')" class="px-2 py-1 bg-slate-800 text-white rounded text-xs hover:bg-slate-700 flex items-center gap-1 ml-auto">
+                                                        <i data-lucide="download" class="w-3 h-3"></i> PDF
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            downloadReportPDF: function(reportId) {
+                const r = this.reportesEntrega.find(rep => rep.id === reportId);
+                if (!r) return;
+
+                const element = document.createElement('div');
+                element.className = 'p-6 space-y-4 font-sans text-slate-900 bg-white';
+                element.innerHTML = `
+                    <div style="text-align: center; border-bottom: 2px solid #334155; padding-bottom: 12px;">
+                        <h2 style="font-size: 18px; font-weight: bold; margin: 0;">TRIBUNAL LABORAL BUROCRÁTICO DE DURANGO</h2>
+                        <p style="font-size: 12px; font-weight: bold; color: #475569; margin: 4px 0 0 0;">PONENCIA TRES - ACTA DE RECEPCIÓN Y CUSTODIA DIGITAL</p>
+                    </div>
+
+                    <div style="font-size: 11px; margin-top: 15px; display: flex; justify-content: space-between;">
+                        <p><strong>Folio Reporte:</strong> ${r.id}</p>
+                        <p><strong>Fecha/Hora:</strong> ${r.fecha}</p>
+                    </div>
+
+                    <div style="font-size: 11px; background-color: #f8fafc; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px;">
+                        <p><strong>Servidor Público Receptor:</strong> ${r.servidorPublico}</p>
+                        <p><strong>Cargo/Área:</strong> ${r.cargo}</p>
+                    </div>
+
+                    <h4 style="font-size: 12px; font-weight: bold; margin-top: 15px;">Expedientes Recibidos:</h4>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 10px; text-align: left;" border="1">
+                        <thead>
+                            <tr style="background-color: #f1f5f9;">
+                                <th style="padding: 6px;">N° Expediente</th>
+                                <th style="padding: 6px;">Procedimiento</th>
+                                <th style="padding: 6px;">Parte Actora</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${r.expedientes.map(e => `
+                                <tr>
+                                    <td style="padding: 6px; font-weight: bold;">${e.numero}</td>
+                                    <td style="padding: 6px;">${e.juicio}</td>
+                                    <td style="padding: 6px;">${e.actor}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+
+                    <div style="font-size: 10px; margin-top: 20px; border-top: 1px solid #cbd5e1; padding-top: 10px;">
+                        <p><strong>Sello de Firma Digital:</strong> ${r.firmaDigitalHash}</p>
+                        <p style="font-size: 9px; color: #64748b;">Documento con validez legal interna firmado mediante aceptación digital con responsabilidad de custodia.</p>
+                    </div>
+                `;
+
+                const opt = {
+                    margin: 10,
+                    filename: `Reporte_Entrega_${r.id}.pdf`,
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: { scale: 2 },
+                    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                };
+
+                html2pdf().set(opt).from(element).save();
+                showAlert(`Descargando reporte PDF ${r.id}...`, 'info');
+            },
+
+            renderFirmaDigitalModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="pen-tool" class="w-5 h-5 text-slate-800"></i>
+                                Pre-Autorización de Firma Digital Escaneada
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="space-y-3 text-xs text-slate-700">
+                            <p>Descargue la plantilla oficial de autorización, fírmela de su puño y letra, y súbala en PDF escaneada para habilitar su firma digital en dos clics.</p>
+                            
+                            <div class="flex items-center gap-2">
+                                <button type="button" onclick="app.downloadSignatureTemplate()" class="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded font-semibold flex items-center gap-1">
+                                    <i data-lucide="download" class="w-4 h-4"></i> Descargar Plantilla Oficial PDF
+                                </button>
+                            </div>
+
+                            <div class="p-3 border border-dashed border-slate-400 rounded-lg bg-slate-50 text-center space-y-2">
+                                <i data-lucide="upload-cloud" class="w-8 h-8 mx-auto text-slate-500"></i>
+                                <label class="block font-bold text-slate-800">Cargar Documento Firmado Escaneado (PDF/Imagen)</label>
+                                <input type="file" id="sig_file_input" accept=".pdf,image/*" class="text-xs text-slate-600">
+                            </div>
+
+                            <div class="flex justify-end gap-2 pt-2 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded">Cancelar</button>
+                                <button type="button" onclick="app.saveSignatureDocument()" class="px-4 py-2 bg-slate-800 text-white rounded font-semibold">Registrar Firma Pre-Autorizada</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            downloadSignatureTemplate: function() {
+                const element = document.createElement('div');
+                element.className = 'p-6 font-sans text-slate-900 space-y-4';
+                element.innerHTML = `
+                    <div style="text-align: center; border-bottom: 2px solid #000; pb-2;">
+                        <h3>TRIBUNAL LABORAL BUROCRÁTICO DE DURANGO</h3>
+                        <p>FORMATO DE REGISTRO Y PRE-AUTORIZACIÓN DE FIRMA DIGITAL DE SERVIDOR PÚBLICO</p>
+                    </div>
+                    <p style="font-size: 11px;">Yo, ________________________________________, con cargo de ________________________, autorizo el uso de mi firma digital escaneada para la recepción formal de paquetes procesales.</p>
+                    <br><br><br>
+                    <div style="text-align: center;">
+                        ________________________________________<br>
+                        Firma Autógrafa del Servidor Público
+                    </div>
+                `;
+                html2pdf().from(element).save('Plantilla_Firma_Digital_Durango.pdf');
+            },
+
+            saveSignatureDocument: function() {
+                showAlert('Firma digital registrada y pre-autorizada con éxito.', 'success');
+                closeModal();
+            },
+
+            renderAnalisisProcedimientosModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-3xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="scale" class="w-5 h-5 text-slate-800"></i>
+                                Marco Legal de Amparo y Ley Orgánica del Poder Judicial de la Federación
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="space-y-3 text-xs leading-relaxed text-slate-700">
+                            <div class="p-3 bg-slate-100 border border-slate-300 rounded-lg">
+                                <h4 class="font-bold text-slate-900 mb-1">1. Dos Tribunales Colegiados de Circuito (25° Circuito - Durango)</h4>
+                                <p>Conforme al marco del 25° Circuito Judicial, Durango cuenta con <strong>dos Tribunales Colegiados de Circuito</strong> competentes para conocer de los amparos directos en materia laboral burocrática interpuestos contra sentencias del Tribunal Laboral Burocrático de Durango (Artículos 34 y 170 LFT / Ley de Amparo).</p>
+                            </div>
+
+                            <div class="p-3 bg-slate-100 border border-slate-300 rounded-lg">
+                                <h4 class="font-bold text-slate-900 mb-1">2. Órganos Jurisdiccionales de La Laguna</h4>
+                                <p>De acuerdo con la Ley Orgánica del Poder Judicial de la Federación (LOPJF) y acuerdos del CJF / Órgano de Administración Judicial, se contempla la circunscripción de <strong>La Laguna (Gómez Palacio / Lerdo / Torreón)</strong>, habilitando la adscripción y vinculación manual de órganos jurisdiccionales federales locales.</p>
+                            </div>
+
+                            <div class="p-3 bg-slate-100 border border-slate-300 rounded-lg">
+                                <h4 class="font-bold text-slate-900 mb-1">3. Criterios de Jurisprudencia y Cadena de Custodia</h4>
+                                <p>Se garantiza la trazabilidad digital e inamovilidad de actuaciones en cumplimiento a precedentes obligatorios y ejecutorias emitidas por la SCJN y los Tribunales Colegiados de Circuito.</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            downloadExcelReport: function() {
+                const headers = ['Numero', 'Prefix', 'Consecutivo', 'Anio', 'Parte Actora', 'Demandado', 'Juicio', 'Tarea', 'Encargado', 'Amparo'];
+                const rows = this.expedientes.map(e => [
+                    `"${e.numero}"`,
+                    `"${e.prefix || ''}"`,
+                    `"${e.consecutivo || ''}"`,
+                    `"${e.anio || ''}"`,
+                    `"${e.actor.replace(/"/g, '""')}"`,
+                    `"${e.demandado.replace(/"/g, '""')}"`,
+                    `"${e.juicio.replace(/"/g, '""')}"`,
+                    `"${e.tarea}"`,
+                    `"${e.encargado}"`,
+                    `"${e.amparo ? e.amparo.tipo + ' ' + (e.amparo.numeroAmparo || '') : 'NO'}"`
+                ]);
+
+                const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                const encodedUri = encodeURI("data:text/csv;charset=utf-8," + csvContent);
+                
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `Reporte_Expedientes_Ponencia3_${new Date().toISOString().split('T')[0]}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                showAlert('Reporte en Excel generado y descargado exitosamente.', 'success');
+            },
+
+            renderForgotPasswordModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-md w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="key-round" class="w-5 h-5 text-slate-700"></i>
+                                Recuperación de Contraseña
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div id="recovery_step1" class="space-y-3">
+                            <p class="text-xs text-slate-600">Ingrese su usuario o correo registrado. Se enviará un código numérico temporal válido por 15 minutos.</p>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 mb-1">Usuario / Email</label>
+                                <input type="text" id="recovery_user_input" class="w-full text-xs p-2 border border-slate-300 rounded" placeholder="Ej. Admin" required>
+                            </div>
+                            <button onclick="app.handleSendRecoveryCode()" class="w-full py-2 bg-slate-800 text-white font-semibold text-xs rounded hover:bg-slate-700">
+                                Generar Clave Temporal
+                            </button>
+                        </div>
+
+                        <div id="recovery_step2" class="hidden space-y-3">
+                            <div class="p-3 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-900 space-y-1">
+                                <p class="font-bold flex items-center gap-1"><i data-lucide="mail-check" class="w-4 h-4"></i> Código Generado</p>
+                                <p>Ingrese la clave recibida para establecer su nueva contraseña.</p>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 mb-1">Código Temporal (6 dígitos)</label>
+                                <input type="text" id="recovery_code_input" class="w-full text-xs p-2 border border-slate-300 rounded font-mono text-center tracking-widest text-lg" placeholder="000000" maxlength="6">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 mb-1">Nueva Contraseña</label>
+                                <input type="password" id="recovery_new_pass" class="w-full text-xs p-2 border border-slate-300 rounded" placeholder="••••••••">
+                            </div>
+                            <button onclick="app.handleVerifyAndResetPassword()" class="w-full py-2 bg-emerald-700 text-white font-semibold text-xs rounded hover:bg-emerald-800">
+                                Restablecer Contraseña e Iniciar Sesión
+                            </button>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleSendRecoveryCode: async function() {
+                const userInput = document.getElementById('recovery_user_input')?.value.trim();
+                if (!userInput) return;
+
+                const user = this.users.find(u => u.username.toLowerCase() === userInput.toLowerCase() || u.email?.toLowerCase() === userInput.toLowerCase());
+                if (!user) {
+                    showAlert('Usuario no encontrado.', 'danger');
+                    return;
+                }
+
+                const tempCode = Math.floor(100000 + Math.random() * 900000).toString();
+                user.tempCode = tempCode;
+                user.tempCodeExpires = Date.now() + (15 * 60 * 1000);
+
+                localStorage.setItem('tb_users', JSON.stringify(this.users));
+
+                if (this.emailConfig.active && this.emailConfig.serviceId) {
+                    try {
+                        await emailjs.send(this.emailConfig.serviceId, this.emailConfig.templateId, {
+                            to_name: user.name,
+                            to_email: user.email || 'usuario@durango.gob.mx',
+                            code: tempCode,
+                            subject: 'Código de Recuperación - Ponencia 3'
+                        });
+                        showAlert('Código enviado a su correo electrónico.', 'success');
+                    } catch(err) {
+                        console.warn('Email delivery notice:', err);
+                    }
+                } else {
+                    showAlert(`Modo Simulación: Su clave temporal es ${tempCode}`, 'info');
+                }
+
+                document.getElementById('recovery_step1').classList.add('hidden');
+                document.getElementById('recovery_step2').classList.remove('hidden');
+            },
+
+            handleVerifyAndResetPassword: function() {
+                const code = document.getElementById('recovery_code_input')?.value.trim();
+                const newPass = document.getElementById('recovery_new_pass')?.value.trim();
+
+                const user = this.users.find(u => u.tempCode === code && u.tempCodeExpires > Date.now());
+
+                if (!user) {
+                    showAlert('Código inválido o expirado (duración 15 minutos).', 'danger');
+                    return;
+                }
+
+                if (!newPass) {
+                    showAlert('Ingrese la nueva contraseña.', 'warning');
+                    return;
+                }
+
+                user.passwordHash = newPass;
+                delete user.tempCode;
+                delete user.tempCodeExpires;
+
+                localStorage.setItem('tb_users', JSON.stringify(this.users));
+                showAlert('Contraseña actualizada exitosamente.', 'success');
+                closeModal();
+            },
+
+            renderEmailConfigModal: function() {
+                const cfg = this.emailConfig;
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-md w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="mail" class="w-5 h-5 text-slate-700"></i>
+                                Configuración de Servicio de Correo (EmailJS)
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <form onsubmit="app.handleSaveEmailConfig(event)" class="space-y-3 text-xs">
+                            <label class="flex items-center gap-2 cursor-pointer font-bold text-slate-800">
+                                <input type="checkbox" id="cfg_email_active" ${cfg.active ? 'checked' : ''} class="rounded text-slate-800">
+                                Activar Envío de Correos Reales
+                            </label>
+
+                            <div>
+                                <label class="block font-semibold text-slate-700 mb-0.5">Public Key</label>
+                                <input type="text" id="cfg_public_key" value="${cfg.publicKey || ''}" class="w-full p-2 border border-slate-300 rounded font-mono" placeholder="user_xxx">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-700 mb-0.5">Service ID</label>
+                                <input type="text" id="cfg_service_id" value="${cfg.serviceId || ''}" class="w-full p-2 border border-slate-300 rounded font-mono" placeholder="service_gmail">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-700 mb-0.5">Template ID</label>
+                                <input type="text" id="cfg_template_id" value="${cfg.templateId || ''}" class="w-full p-2 border border-slate-300 rounded font-mono" placeholder="template_xxx">
+                            </div>
+
+                            <div class="flex justify-end gap-2 pt-2 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-2 bg-slate-800 text-white rounded font-semibold">Guardar Credenciales</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleSaveEmailConfig: function(e) {
+                e.preventDefault();
+                this.emailConfig = {
+                    active: document.getElementById('cfg_email_active').checked,
+                    publicKey: document.getElementById('cfg_public_key').value.trim(),
+                    serviceId: document.getElementById('cfg_service_id').value.trim(),
+                    templateId: document.getElementById('cfg_template_id').value.trim()
+                };
+
+                localStorage.setItem('tb_email_config', JSON.stringify(this.emailConfig));
+                if (this.emailConfig.active && this.emailConfig.publicKey) {
+                    try { emailjs.init(this.emailConfig.publicKey); } catch(err) {}
+                }
+
+                showAlert('Configuración de correo guardada.', 'success');
+                closeModal();
+            },
+
+            renderAuditLogModal: function() {
+                const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+                const currentYr = new Date().getFullYear();
+
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="history" class="w-5 h-5 text-slate-700"></i>
+                                Bitácora de Actividades de Servidores Públicos (Retención 1 Año)
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-200 text-xs">
+                            <div>
+                                <label class="block font-semibold text-slate-700 mb-1">Servidor Público</label>
+                                <select id="log_filter_user" class="w-full p-1.5 border rounded bg-white">
+                                    <option value="">Todos los Servidores</option>
+                                    ${this.users.map(u => `<option value="${u.username}">${u.name}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-700 mb-1">Mes de Consulta</label>
+                                <select id="log_filter_month" class="w-full p-1.5 border rounded bg-white">
+                                    <option value="">Todos los Meses</option>
+                                    ${months.map((m, i) => `<option value="${i}">${m}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-700 mb-1">Año</label>
+                                <select id="log_filter_year" class="w-full p-1.5 border rounded bg-white">
+                                    <option value="${currentYr}">${currentYr}</option>
+                                    <option value="${currentYr - 1}">${currentYr - 1}</option>
+                                </select>
+                            </div>
+                            <div class="flex items-end">
+                                <button onclick="app.downloadAuditLogsExcel()" class="w-full py-2 bg-emerald-700 text-white rounded font-semibold hover:bg-emerald-800 flex items-center justify-center gap-1">
+                                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Descargar Excel
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="border rounded-lg overflow-hidden bg-white">
+                            <div class="max-h-80 overflow-y-auto">
+                                <table class="w-full text-left text-xs border-collapse">
+                                    <thead>
+                                        <tr class="bg-slate-100 border-b font-semibold text-slate-700">
+                                            <th class="p-2">Fecha/Hora</th>
+                                            <th class="p-2">Servidor</th>
+                                            <th class="p-2">Cargo</th>
+                                            <th class="p-2">Acción</th>
+                                            <th class="p-2">Detalles</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-200">
+                                        ${this.auditLogs.map(l => `
+                                            <tr class="hover:bg-slate-50">
+                                                <td class="p-2 text-slate-500 whitespace-nowrap">${l.fecha}</td>
+                                                <td class="p-2 font-bold text-slate-900">${l.usuario}</td>
+                                                <td class="p-2 text-slate-600">${l.role}</td>
+                                                <td class="p-2 font-semibold text-indigo-900">${l.accion}</td>
+                                                <td class="p-2 text-slate-700">${l.detalles}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            downloadAuditLogsExcel: function() {
+                const headers = ['Fecha', 'Usuario', 'Rol', 'Accion', 'Detalles'];
+                const rows = this.auditLogs.map(l => [
+                    `"${l.fecha}"`,
+                    `"${l.usuario}"`,
+                    `"${l.role}"`,
+                    `"${l.accion}"`,
+                    `"${l.detalles.replace(/"/g, '""')}"`
+                ]);
+
+                const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                const encodedUri = encodeURI("data:text/csv;charset=utf-8," + csvContent);
+                
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `Bitacora_Actividades_${new Date().toISOString().split('T')[0]}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                showAlert('Bitácora mensual descargada en formato Excel.', 'success');
+            },
+
+            renderRegisterModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="user-plus" class="w-5 h-5 text-slate-700"></i>
+                                Registro de Nuevo Servidor Público
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <form onsubmit="app.handleRegisterSubmit(event)" class="space-y-3 text-xs">
+                            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                                <label class="block text-xs font-bold text-slate-800 uppercase tracking-wider">1. Datos Personales y Credenciales</label>
+                                <div>
+                                    <label class="block font-semibold text-slate-700 mb-0.5">Nombre Completo</label>
+                                    <input type="text" id="reg_name" class="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-500" placeholder="Ej. Lic. Sofía Castro" required>
+                                </div>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block font-semibold text-slate-700 mb-0.5">Nombre de Usuario</label>
+                                        <input type="text" id="reg_username" class="w-full p-2 border border-slate-300 rounded font-mono" placeholder="Ej. scastro" required>
+                                    </div>
+                                    <div>
+                                        <label class="block font-semibold text-slate-700 mb-0.5">Correo Electrónico Institucional</label>
+                                        <input type="email" id="reg_email" class="w-full p-2 border border-slate-300 rounded" placeholder="ejemplo@durango.gob.mx" required>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block font-semibold text-slate-700 mb-0.5">Área de Asignación / Cargo</label>
+                                        <select id="reg_role" class="w-full p-2 border border-slate-300 rounded bg-white font-medium">
+                                            <option value="Juez de Ponencia">Juez de Ponencia</option>
+                                            <option value="Secretaría de Acuerdos">Secretaría de Acuerdos</option>
+                                            <option value="Secretaría Proyectista / Estudio y Cuenta">Secretaría Proyectista / Estudio y Cuenta</option>
+                                            <option value="Mesa de Dictamen / Proyectos">Mesa de Dictamen / Proyectos</option>
+                                            <option value="Actuaría / Notificaciones">Actuaría / Notificaciones</option>
+                                            <option value="Mesa de Entrada / Oficialía de Partes">Mesa de Entrada / Oficialía de Partes</option>
+                                            <option value="Mesa de Conciliación y Convenios">Mesa de Conciliación y Convenios</option>
+                                            <option value="Archivo y Resguardo Procesal">Archivo y Resguardo Procesal</option>
+                                            <option value="Administrador General">Administrador General</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block font-semibold text-slate-700 mb-0.5">Contraseña de Acceso</label>
+                                        <input type="password" id="reg_pass" class="w-full p-2 border border-slate-300 rounded" placeholder="••••••••" required>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                                <label class="block text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1">
+                                    <i data-lucide="file-text" class="w-4 h-4 text-slate-700"></i>
+                                    2. Carga de Documentación Oficial (Nombramiento / Identificación)
+                                </label>
+                                <p class="text-[11px] text-slate-600">Adjunte copia en formato PDF o imagen de su nombramiento oficial, acta de toma de protesta o identificación institucional.</p>
+                                <div class="border border-dashed border-slate-300 bg-white p-3 rounded text-center">
+                                    <input type="file" id="reg_doc_file" accept=".pdf,image/*" class="text-xs text-slate-600 w-full" required>
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                                <label class="block text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1">
+                                    <i data-lucide="pen-tool" class="w-4 h-4 text-amber-700"></i>
+                                    3. Carga y Registro de Firma Electrónica / Digital (.PNG / .PDF Escaneado)
+                                </label>
+                                <p class="text-[11px] text-slate-600">Suba su formato de firma electrónica autógrafa digitalizada o imagen con fondo transparente para las actas de entrega/recepción.</p>
+                                <div class="border border-dashed border-amber-300 bg-amber-50/50 p-3 rounded text-center">
+                                    <input type="file" id="reg_signature_file" accept=".png,.jpg,.jpeg,.pdf" class="text-xs text-slate-600 w-full" required>
+                                </div>
+                            </div>
+
+                            <div class="flex justify-end gap-2 pt-2 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-2 bg-slate-800 text-white rounded font-semibold hover:bg-slate-700 flex items-center gap-1.5">
+                                    <i data-lucide="check" class="w-4 h-4"></i> Enviar Solicitud con Documentos
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleRegisterSubmit: function(e) {
+                e.preventDefault();
+                const name = document.getElementById('reg_name').value.trim();
+                const username = document.getElementById('reg_username').value.trim();
+                const email = document.getElementById('reg_email').value.trim();
+                const role = document.getElementById('reg_role').value;
+                const pass = document.getElementById('reg_pass').value.trim();
+
+                const docFile = document.getElementById('reg_doc_file').files[0];
+                const sigFile = document.getElementById('reg_signature_file').files[0];
+
+                const newUser = {
+                    id: 'usr-' + Date.now().toString(36),
+                    username, 
+                    name, 
+                    email,
+                    role,
+                    passwordHash: pass,
+                    status: 'pendiente',
+                    documentoAdjunto: docFile ? docFile.name : 'Documento_Oficial.pdf',
+                    firmaElectronicaAdjunta: sigFile ? sigFile.name : 'Firma_Digitalizada.png',
+                    fechaRegistro: new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX')
+                };
+
+                this.users.push(newUser);
+                localStorage.setItem('tb_users', JSON.stringify(this.users));
+                this.logAudit('Solicitud Registro', `Alta de usuario ${username} con documentos y firma electrónica adjunta.`);
+                
+                showAlert('Solicitud registrada con documentación y firma adjunta. Pendiente de aprobación por el Administrador.', 'success');
+                closeModal();
+            },
+
+            renderAdminPanel: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-3xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="shield" class="w-5 h-5 text-slate-700"></i>
+                                Panel de Administración de Usuarios
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="divide-y divide-slate-200 border rounded-lg overflow-hidden bg-white">
+                            ${this.users.map(u => `
+                                <div class="p-3 flex items-center justify-between text-xs">
+                                    <div>
+                                        <p class="font-bold text-slate-900">${u.name} <span class="font-mono text-slate-500">(${u.username})</span></p>
+                                        <p class="text-slate-600">${u.role} - <span class="uppercase text-[10px] font-bold ${u.status === 'aprobado' ? 'text-emerald-700' : 'text-amber-700'}">${u.status}</span></p>
+                                    </div>
+                                    <div class="flex gap-1">
+                                        ${u.status === 'pendiente' ? `
+                                            <button onclick="app.approveUser('${u.id}')" class="px-2 py-1 bg-emerald-600 text-white rounded font-bold">Aprobar</button>
+                                        ` : ''}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            approveUser: function(userId) {
+                const u = this.users.find(usr => usr.id === userId);
+                if (u) {
+                    u.status = 'aprobado';
+                    localStorage.setItem('tb_users', JSON.stringify(this.users));
+                    showAlert(`Usuario ${u.name} aprobado.`, 'success');
+                    this.renderAdminPanel();
+                }
+            }
+        };
+
+        window.onload = function() {
+            app.init();
+        };
+    </script>
+</body>
+</html>
