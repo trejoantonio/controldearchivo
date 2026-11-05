@@ -1,0 +1,1447 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Control de Expedientes - Ponencia Tres</title>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Configuration setup
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "",
+            authDomain: "",
+            projectId: "default-project",
+            storageBucket: "",
+            messagingSenderId: "",
+            appId: ""
+        };
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tb-ponencia3-app';
+
+        let appFirebase = null;
+        let db = null;
+        let auth = null;
+
+        if (firebaseConfig.projectId && firebaseConfig.projectId !== "default-project") {
+            try {
+                appFirebase = initializeApp(firebaseConfig);
+                db = getFirestore(appFirebase);
+                auth = getAuth(appFirebase);
+
+                // Authentication init with fallback to anonymous authentication
+                const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                if (token) {
+                    await signInWithCustomToken(auth, token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Attach strict path helpers as mandated by storage instructions:
+                // Mandatory Path: /artifacts/{appId}/public/data/{collectionName}
+                window.firebaseDb = db;
+                window.firebaseAuth = auth;
+                window.firebaseAppId = appId;
+                window.firestoreCollections = {
+                    publicData: (coll) => collection(db, 'artifacts', appId, 'public', 'data', coll),
+                    publicDoc: (coll, id) => doc(db, 'artifacts', appId, 'public', 'data', coll, id)
+                };
+
+                console.log("Firebase initialized successfully with online Firestore paths.");
+            } catch (err) {
+                console.warn("Firebase initialization skipped or failed, falling back to local storage:", err);
+            }
+        }
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,400&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+            color: #1e293b;
+        }
+
+        .font-serif {
+            font-family: 'Playfair Display', Georgia, serif;
+        }
+
+        .silver-gradient {
+            background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 50%, #94a3b8 100%);
+        }
+
+        .silver-header-gradient {
+            background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+            border-bottom: 2px solid #64748b;
+        }
+
+        .silver-card-border {
+            border: 1px solid #cbd5e1;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        }
+
+        .silver-badge {
+            background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+            color: #334155;
+            border: 1px solid #cbd5e1;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #94a3b8;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 min-h-screen text-slate-800 antialiased selection:bg-slate-700 selection:text-white">
+
+    <!-- App Main Container -->
+    <div id="app" class="min-h-screen flex flex-col">
+        <!-- Dynamic Content Rendered Here -->
+    </div>
+
+    <!-- Global Modal Container -->
+    <div id="modal" class="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-2 sm:p-4">
+        <div id="modal-content" class="bg-white rounded-xl shadow-2xl border border-slate-300 max-w-4xl w-full max-h-[92vh] overflow-y-auto transform transition-all">
+            <!-- Modal Body injected via JS -->
+        </div>
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-md w-full px-4 pointer-events-none"></div>
+
+    <script>
+        function openModal(content) {
+            const modal = document.getElementById('modal');
+            const modalContent = document.getElementById('modal-content');
+            modalContent.innerHTML = content;
+            modal.classList.remove('hidden');
+            if (window.lucide) lucide.createIcons();
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('modal');
+            modal.classList.add('hidden');
+        }
+
+        function showAlert(msg, type = 'info') {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+
+            const bgColors = {
+                success: 'bg-emerald-600 text-white border-emerald-500',
+                danger: 'bg-rose-600 text-white border-rose-500',
+                warning: 'bg-amber-500 text-slate-950 border-amber-400 font-semibold',
+                info: 'bg-slate-800 text-slate-100 border-slate-600'
+            };
+
+            const icons = {
+                success: 'check-circle-2',
+                danger: 'alert-triangle',
+                warning: 'alert-circle',
+                info: 'info'
+            };
+
+            const toast = document.createElement('div');
+            toast.className = `p-3 rounded-lg shadow-xl border ${bgColors[type] || bgColors.info} text-xs flex items-center justify-between gap-3 transform transition-all duration-300 translate-y-2 opacity-0 pointer-events-auto`;
+            toast.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i data-lucide="${icons[type] || 'info'}" class="w-4 h-4 shrink-0"></i>
+                    <span>${msg}</span>
+                </div>
+                <button onclick="this.parentElement.remove()" class="text-xs opacity-70 hover:opacity-100 p-1"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
+            `;
+
+            container.appendChild(toast);
+            if (window.lucide) lucide.createIcons();
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            }, 10);
+
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.remove();
+                }
+            }, 4000);
+        }
+
+        const app = {
+            currentUser: null,
+            activeTab: 'dashboard',
+            expedientes: [],
+            reportesEntrega: [],
+            users: [],
+            auditLogs: [],
+            organosJurisdiccionales: [],
+            emailConfig: {
+                active: false,
+                publicKey: '',
+                serviceId: '',
+                templateId: ''
+            },
+
+            init: function() {
+                this.loadDefaultUsers();
+                this.loadInitialData();
+                this.initFirebaseSync();
+                const session = localStorage.getItem('tb_session');
+                if (session) {
+                    this.currentUser = JSON.parse(session);
+                    // Initialize simulated active area for Admin testing
+                    if (this.currentUser.role === 'Admin' && !this.currentUser.activeSimulatedRole) {
+                        this.currentUser.activeSimulatedRole = 'Administrador General';
+                    }
+                    this.renderDashboard();
+                } else {
+                    this.renderLogin();
+                }
+            },
+
+            renderLogin: function() {
+                const container = document.getElementById('app');
+                container.innerHTML = `
+                    <div class="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4">
+                        <div class="max-w-md w-full space-y-6 bg-slate-900 border border-slate-800 p-6 sm:p-8 rounded-2xl shadow-2xl text-slate-100">
+                            <div class="text-center space-y-2">
+                                <div class="inline-flex p-3 bg-slate-800 border border-slate-700 rounded-2xl mb-2 text-slate-200">
+                                    <i data-lucide="landmark" class="w-8 h-8"></i>
+                                </div>
+                                <h2 class="text-xl font-serif font-bold tracking-wide text-slate-100">Tribunal Laboral Burocrático</h2>
+                                <p class="text-xs text-slate-400 font-medium">Ponencia Tres | Control de Expedientes y Custodia</p>
+                            </div>
+
+                            <form onsubmit="app.handleLoginSubmit(event)" class="space-y-4">
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-300 mb-1">Usuario</label>
+                                    <div class="relative">
+                                        <i data-lucide="user" class="w-4 h-4 absolute left-3 top-3 text-slate-500"></i>
+                                        <input type="text" id="login_username" class="w-full text-xs pl-9 pr-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-slate-500" placeholder="Ej. Admin" required>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-300 mb-1">Contraseña</label>
+                                    <div class="relative">
+                                        <i data-lucide="lock" class="w-4 h-4 absolute left-3 top-3 text-slate-500"></i>
+                                        <input type="password" id="login_password" class="w-full text-xs pl-9 pr-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-slate-500" placeholder="••••••••" required>
+                                    </div>
+                                </div>
+
+                                <button type="submit" class="w-full py-2.5 bg-slate-100 hover:bg-white text-slate-950 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2">
+                                    <i data-lucide="log-in" class="w-4 h-4"></i> Iniciar Sesión
+                                </button>
+                            </form>
+
+                            <div class="flex justify-between items-center text-xs text-slate-400 border-t border-slate-800 pt-4">
+                                <button type="button" onclick="app.renderRegisterModal()" class="hover:text-slate-200 underline">Solicitar Registro</button>
+                                <button type="button" onclick="app.renderForgotPasswordModal()" class="hover:text-slate-200 underline">¿Olvidaste tu contraseña?</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                if (window.lucide) lucide.createIcons();
+            },
+
+            handleLoginSubmit: function(e) {
+                e.preventDefault();
+                const usernameInput = document.getElementById('login_username').value.trim();
+                const passwordInput = document.getElementById('login_password').value.trim();
+
+                const user = this.users.find(u => u.username.toLowerCase() === usernameInput.toLowerCase() && u.passwordHash === passwordInput);
+
+                if (!user) {
+                    showAlert('Usuario o contraseña incorrectos.', 'danger');
+                    return;
+                }
+
+                if (user.status !== 'aprobado') {
+                    showAlert('Tu cuenta se encuentra pendiente de aprobación por el Administrador General.', 'warning');
+                    return;
+                }
+
+                this.currentUser = user;
+                if (user.role === 'Admin' && !user.activeSimulatedRole) {
+                    this.currentUser.activeSimulatedRole = 'Administrador General';
+                }
+
+                localStorage.setItem('tb_session', JSON.stringify(this.currentUser));
+                this.logAudit('Inicio de Sesión', `Usuario ${user.username} ingresó al sistema.`);
+                showAlert(`Bienvenido, ${user.name}`, 'success');
+                this.renderDashboard();
+            },
+
+            renderForgotPasswordModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-md w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base font-serif font-bold text-slate-900">Recuperación de Contraseña</h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <p class="text-xs text-slate-600">Comunícate con el Administrador General (Admin) para restablecer tus credenciales de acceso o verificar la clave prestablecida.</p>
+                        <div class="flex justify-end pt-3 border-t">
+                            <button type="button" onclick="closeModal()" class="px-4 py-2 bg-slate-800 text-white rounded text-xs font-bold">Entendido</button>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            logout: function() {
+                if (this.currentUser) {
+                    this.logAudit('Cierre de Sesión', `Usuario ${this.currentUser.username} cerró sesión.`);
+                }
+                this.currentUser = null;
+                localStorage.removeItem('tb_session');
+                showAlert('Sesión cerrada correctamente.', 'info');
+                this.renderLogin();
+            },
+
+            initFirebaseSync: function() {
+                if (window.firebaseDb && window.firestoreCollections) {
+                    try {
+                        const expCol = window.firestoreCollections.publicData('expedientes');
+                        const reportsCol = window.firestoreCollections.publicData('reportes_entrega');
+                        const logsCol = window.firestoreCollections.publicData('audit_logs');
+
+                        import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ onSnapshot }) => {
+                            // Realtime snapshot listener for Expedientes
+                            onSnapshot(expCol, (snapshot) => {
+                                if (!snapshot.empty) {
+                                    const remoteExps = [];
+                                    snapshot.forEach(doc => remoteExps.push({ id: doc.id, ...doc.data() }));
+                                    if (remoteExps.length > 0) {
+                                        this.expedientes = remoteExps;
+                                        localStorage.setItem('tb_expedientes', JSON.stringify(this.expedientes));
+                                        if (this.activeTab === 'dashboard') this.filterExpedientesTable();
+                                    }
+                                }
+                            }, (err) => console.warn("Firestore Expedientes sync error:", err));
+
+                            // Realtime snapshot listener for Reportes de Entrega
+                            onSnapshot(reportsCol, (snapshot) => {
+                                if (!snapshot.empty) {
+                                    const remoteReports = [];
+                                    snapshot.forEach(doc => remoteReports.push({ id: doc.id, ...doc.data() }));
+                                    if (remoteReports.length > 0) {
+                                        this.reportesEntrega = remoteReports;
+                                        localStorage.setItem('tb_reportes_entrega', JSON.stringify(this.reportesEntrega));
+                                    }
+                                }
+                            }, (err) => console.warn("Firestore Reports sync error:", err));
+
+                            // Realtime snapshot listener for Audit Logs
+                            onSnapshot(logsCol, (snapshot) => {
+                                if (!snapshot.empty) {
+                                    const remoteLogs = [];
+                                    snapshot.forEach(doc => remoteLogs.push({ id: doc.id, ...doc.data() }));
+                                    if (remoteLogs.length > 0) {
+                                        this.auditLogs = remoteLogs;
+                                        localStorage.setItem('tb_audit_logs', JSON.stringify(this.auditLogs));
+                                    }
+                                }
+                            }, (err) => console.warn("Firestore Logs sync error:", err));
+                        });
+                    } catch(e) {
+                        console.warn("Realtime listener setup exception:", e);
+                    }
+                }
+            },
+<!-- ... existing code ... background log persistence -->
+            logAudit: function(accion, detalles) {
+                const user = this.currentUser || { name: 'Sistema', role: 'General' };
+                const log = {
+                    id: 'log-' + Date.now().toString(36),
+                    fecha: new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX'),
+                    usuario: user.name,
+                    role: user.role,
+                    accion,
+                    detalles
+                };
+                this.auditLogs.unshift(log);
+                localStorage.setItem('tb_audit_logs', JSON.stringify(this.auditLogs));
+
+                if (window.firebaseDb && window.firestoreCollections) {
+                    import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ setDoc }) => {
+                        const docRef = window.firestoreCollections.publicDoc('audit_logs', log.id);
+                        setDoc(docRef, log).catch(err => console.warn("Firestore log save fallback:", err));
+                    });
+                }
+            },
+
+            loadDefaultUsers: function() {
+                const storedUsers = localStorage.getItem('tb_users');
+                if (storedUsers) {
+                    this.users = JSON.parse(storedUsers);
+                } else {
+                    this.users = [
+                        { id: 'usr-admin', username: 'Admin', passwordHash: '662666', name: 'Administrador General', role: 'Administrador General', status: 'aprobado' },
+                        { id: 'usr-juez', username: 'Juez3', passwordHash: '123', name: 'Lic. Juez Ponencia 3', role: 'Juez de Ponencia', status: 'aprobado' },
+                        { id: 'usr-sec-inicio', username: 'SecInicio', passwordHash: '123', name: 'Lic. Secretaría de Acuerdos de Inicio', role: 'Secretaría de Acuerdos de Inicio', status: 'aprobado' },
+                        { id: 'usr-sec-tramite', username: 'SecTramite', passwordHash: '123', name: 'Lic. Secretaría de Acuerdos de Trámite y Ejecución', role: 'Secretaría de Acuerdos de Trámite / Ejecución', status: 'aprobado' },
+                        { id: 'usr-proyectista', username: 'Proyectista1', passwordHash: '123', name: 'Lic. Secretario Proyectista', role: 'Secretaría Proyectista / Estudio y Cuenta', status: 'aprobado' },
+                        { id: 'usr-actuaria', username: 'Actuaria1', passwordHash: '123', name: 'Lic. Actuaria Notificadora', role: 'Actuaría / Notificaciones', status: 'aprobado' }
+                    ];
+                    localStorage.setItem('tb_users', JSON.stringify(this.users));
+                }
+
+                const admin = this.users.find(u => u.username === 'Admin');
+                if (admin) admin.passwordHash = '662666';
+                localStorage.setItem('tb_users', JSON.stringify(this.users));
+            },
+
+            loadInitialData: function() {
+                this.expedientes = JSON.parse(localStorage.getItem('tb_expedientes')) || [
+                    {
+                        id: 'exp-1',
+                        prefix: 'TLB',
+                        consecutivo: '001',
+                        anio: '2026',
+                        numero: 'TLB/001/2026',
+                        actorNombre: 'José',
+                        actorPaterno: 'Martínez',
+                        actorMaterno: 'Gómez',
+                        actor: 'José Martínez Gómez',
+                        demandado: 'Secretaría de Educación del Estado de Durango',
+                        juicio: 'Ordinario Burocrático',
+                        tarea: 'Pendiente Contestación de Demanda (En Archivo)',
+                        encargado: 'Archivo y Resguardo Procesal',
+                        fechaRegistro: '15/01/2026 10:30',
+                        audienciaProgramada: '2026-03-10T10:00',
+                        observacionesProyecto: '',
+                        estadoProyecto: 'Pendiente',
+                        historial: []
+                    }
+                ];
+
+                this.reportesEntrega = JSON.parse(localStorage.getItem('tb_reportes_entrega')) || [];
+                this.auditLogs = JSON.parse(localStorage.getItem('tb_audit_logs')) || [];
+                this.emailConfig = JSON.parse(localStorage.getItem('tb_email_config')) || { active: false, publicKey: '', serviceId: '', templateId: '' };
+
+                this.organosJurisdiccionales = JSON.parse(localStorage.getItem('tb_organos_jurisdiccionales')) || [
+                    { id: 'org-1', nombre: 'Primer Tribunal Colegiado del 25° Circuito (Durango)', circuito: '25° Circuito - Durango', tipo: 'Tribunal Colegiado de Circuito' },
+                    { id: 'org-2', nombre: 'Segundo Tribunal Colegiado del 25° Circuito (Durango)', circuito: '25° Circuito - Durango', tipo: 'Tribunal Colegiado de Circuito' },
+                    { id: 'org-3', nombre: 'Tribunal Colegiado de Circuito de la Laguna (Gómez Palacio / Torreón)', circuito: 'Circuito de La Laguna', tipo: 'Tribunal Colegiado de Circuito' },
+                    { id: 'org-4', nombre: 'Juzgado Primero de Distrito en Durango', circuito: '25° Circuito - Durango', tipo: 'Juzgado de Distrito' },
+                    { id: 'org-5', nombre: 'Juzgado de Distrito en la Comarca Lagunera', circuito: 'Circuito de La Laguna', tipo: 'Juzgado de Distrito' }
+                ];
+            },
+
+            logAudit: function(accion, detalles) {
+                const user = this.currentUser || { name: 'Sistema', role: 'General' };
+                const log = {
+                    id: 'log-' + Date.now().toString(36),
+                    fecha: new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX'),
+                    usuario: user.name,
+                    role: user.role,
+                    accion,
+                    detalles
+                };
+                this.auditLogs.unshift(log);
+                localStorage.setItem('tb_audit_logs', JSON.stringify(this.auditLogs));
+            },
+
+            setTab: function(tab) {
+                this.activeTab = tab;
+                this.renderDashboard();
+            },
+
+            // Allows Admin to switch simulated active area for thorough system testing
+            setSimulatedRole: function(roleName) {
+                if (!this.currentUser || this.currentUser.role !== 'Admin') return;
+                this.currentUser.activeSimulatedRole = roleName;
+                localStorage.setItem('tb_session', JSON.stringify(this.currentUser));
+                this.logAudit('Prueba de Sistema', `Admin cambió su área activa simulada a: ${roleName}`);
+                showAlert(`Modo Simulación: Ahora actuando como ${roleName}`, 'info');
+                this.renderDashboard();
+            },
+
+            renderDashboard: function() {
+                const container = document.getElementById('app');
+                const currentUser = this.currentUser;
+                const activeRoleDisplay = (currentUser.role === 'Admin' && currentUser.activeSimulatedRole) 
+                    ? currentUser.activeSimulatedRole 
+                    : currentUser.role;
+
+                container.innerHTML = `
+                    <header class="silver-header-gradient text-slate-100 shadow-xl sticky top-0 z-30">
+                        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col sm:flex-row justify-between items-center gap-3">
+                            <div class="flex items-center gap-3">
+                                <div class="p-2 bg-slate-800 border border-slate-600 rounded-xl shadow-inner">
+                                    <i data-lucide="landmark" class="w-6 h-6 text-slate-300"></i>
+                                </div>
+                                <div>
+                                    <h1 class="text-base sm:text-lg font-serif font-bold text-slate-100">
+                                        Tribunal Laboral Burocrático | Ponencia Tres
+                                    </h1>
+                                    <p class="text-[11px] text-slate-400">Sistema Integral de Control y Rastrear de Expedientes</p>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center gap-2 text-xs flex-wrap justify-end">
+                                <div class="silver-badge px-3 py-1.5 rounded-lg flex items-center gap-2">
+                                    <i data-lucide="user" class="w-3.5 h-3.5 text-slate-600"></i>
+                                    <span class="font-semibold">${currentUser.name}</span>
+                                    <span class="text-[10px] text-slate-500 font-mono">(${activeRoleDisplay})</span>
+                                </div>
+
+                                ${currentUser.role === 'Admin' ? `
+                                    <div class="flex items-center gap-1 bg-amber-950/80 border border-amber-500/60 p-1 rounded-lg text-amber-200">
+                                        <i data-lucide="sliders" class="w-3.5 h-3.5 text-amber-400 shrink-0 ml-1"></i>
+                                        <label class="text-[10px] font-bold uppercase tracking-wider text-amber-400 shrink-0">Área Activa (Pruebas):</label>
+                                        <select onchange="app.setSimulatedRole(this.value)" class="text-[11px] bg-slate-900 text-amber-200 border border-amber-600/60 rounded px-1.5 py-0.5 focus:outline-none font-semibold">
+                                            <option value="Administrador General" ${currentUser.activeSimulatedRole === 'Administrador General' ? 'selected' : ''}>Administrador General</option>
+                                            <option value="Juez de Ponencia" ${currentUser.activeSimulatedRole === 'Juez de Ponencia' ? 'selected' : ''}>Juez de Ponencia</option>
+                                            <option value="Mesa de Entrada / Oficialía de Partes" ${currentUser.activeSimulatedRole === 'Mesa de Entrada / Oficialía de Partes' ? 'selected' : ''}>Oficialía de Partes</option>
+                                            <option value="Secretaría de Acuerdos de Inicio" ${currentUser.activeSimulatedRole === 'Secretaría de Acuerdos de Inicio' ? 'selected' : ''}>Sec. Acuerdos de Inicio</option>
+                                            <option value="Secretaría de Acuerdos de Trámite / Ejecución" ${currentUser.activeSimulatedRole === 'Secretaría de Acuerdos de Trámite / Ejecución' ? 'selected' : ''}>Sec. Acuerdos de Trámite</option>
+                                            <option value="Secretaría Proyectista / Estudio y Cuenta" ${currentUser.activeSimulatedRole === 'Secretaría Proyectista / Estudio y Cuenta' ? 'selected' : ''}>Secretaría Proyectista</option>
+                                            <option value="Actuaría / Notificaciones" ${currentUser.activeSimulatedRole === 'Actuaría / Notificaciones' ? 'selected' : ''}>Actuaría / Notificaciones</option>
+                                            <option value="Mesa de Conciliación y Convenios" ${currentUser.activeSimulatedRole === 'Mesa de Conciliación y Convenios' ? 'selected' : ''}>Mesa de Convenios</option>
+                                            <option value="Mesa de Amparo Directo" ${currentUser.activeSimulatedRole === 'Mesa de Amparo Directo' ? 'selected' : ''}>Mesa de Amparo Directo</option>
+                                            <option value="Mesa de Amparo Indirecto" ${currentUser.activeSimulatedRole === 'Mesa de Amparo Indirecto' ? 'selected' : ''}>Mesa de Amparo Indirecto</option>
+                                            <option value="Archivo y Resguardo Procesal" ${currentUser.activeSimulatedRole === 'Archivo y Resguardo Procesal' ? 'selected' : ''}>Archivo Procesal</option>
+                                        </select>
+                                    </div>
+                                ` : ''}
+
+                                ${(currentUser.role === 'Admin' || currentUser.role.includes('Juez') || currentUser.role.includes('Administrador')) ? `
+                                    <button onclick="app.renderAuditLogModal()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-lg flex items-center gap-1">
+                                        <i data-lucide="history" class="w-3.5 h-3.5"></i> Bitácora
+                                    </button>
+                                ` : ''}
+
+                                ${(currentUser.role === 'Admin' || currentUser.role.includes('Administrador')) ? `
+                                    <button onclick="app.renderAdminPanel()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-lg flex items-center gap-1">
+                                        <i data-lucide="shield" class="w-3.5 h-3.5"></i> Usuarios
+                                    </button>
+                                ` : ''}
+
+                                <button onclick="app.logout()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-rose-900 text-slate-300 hover:text-white border border-slate-600 rounded-lg flex items-center gap-1">
+                                    <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Salir
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-4">
+                        <div class="bg-white p-2 rounded-xl border border-slate-200 shadow-sm flex items-center gap-2 overflow-x-auto text-xs font-medium">
+                            <button onclick="app.setTab('dashboard')" class="px-3 py-2 rounded-lg flex items-center gap-1.5 whitespace-nowrap ${this.activeTab === 'dashboard' ? 'bg-slate-800 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'}">
+                                <i data-lucide="layout-dashboard" class="w-4 h-4"></i> Rastrear Expedientes (${this.expedientes.length})
+                            </button>
+                            <button onclick="app.setTab('audiencias')" class="px-3 py-2 rounded-lg flex items-center gap-1.5 whitespace-nowrap ${this.activeTab === 'audiencias' ? 'bg-slate-800 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'}">
+                                <i data-lucide="calendar" class="w-4 h-4 text-amber-600"></i> Agenda de Audiencias Diferidas
+                            </button>
+                            <button onclick="app.setTab('proyectos')" class="px-3 py-2 rounded-lg flex items-center gap-1.5 whitespace-nowrap ${this.activeTab === 'proyectos' ? 'bg-slate-800 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'}">
+                                <i data-lucide="file-text" class="w-4 h-4 text-indigo-600"></i> Revisión de Proyectos
+                            </button>
+                            <button onclick="app.setTab('amparo')" class="px-3 py-2 rounded-lg flex items-center gap-1.5 whitespace-nowrap ${this.activeTab === 'amparo' ? 'bg-slate-800 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'}">
+                                <i data-lucide="shield-alert" class="w-4 h-4 text-rose-500"></i> Control Ley de Amparo
+                            </button>
+                            <button onclick="app.setTab('reportes_entrega')" class="px-3 py-2 rounded-lg flex items-center gap-1.5 whitespace-nowrap ${this.activeTab === 'reportes_entrega' ? 'bg-slate-800 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'}">
+                                <i data-lucide="file-check-2" class="w-4 h-4 text-emerald-500"></i> Entregas y Custodia (${this.reportesEntrega.length})
+                            </button>
+                        </div>
+
+                        ${this.activeTab === 'dashboard' ? this.renderExpedientesView() : ''}
+                        ${this.activeTab === 'audiencias' ? this.renderAudienciasView() : ''}
+                        ${this.activeTab === 'proyectos' ? this.renderProyectosView() : ''}
+                        ${this.activeTab === 'amparo' ? this.renderAmparoView() : ''}
+                        ${this.activeTab === 'reportes_entrega' ? this.renderReportesEntregaView() : ''}
+                    </main>
+
+                    <footer class="bg-slate-950 border-t border-slate-800 text-slate-500 text-[11px] py-4 text-center">
+                        <p>© 2026 Tribunal Laboral Burocrático de Durango - Ponencia Tres. Sistema de Control Operativo Procesal.</p>
+                    </footer>
+                `;
+                if (window.lucide) lucide.createIcons();
+                if (this.activeTab === 'dashboard') this.filterExpedientesTable();
+            },
+
+            renderCasePrefixSelector: function(selectedPrefix = 'TLB', selectedNum = '', selectedYear = new Date().getFullYear()) {
+                const years = [];
+                const currentYr = new Date().getFullYear();
+                for (let y = currentYr; y >= 2020; y--) years.push(y);
+
+                return `
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">Prefijo Procedimiento</label>
+                            <select id="exp_prefix" class="w-full text-xs p-2 border border-slate-300 rounded-md font-semibold bg-slate-50">
+                                <option value="TLB" ${selectedPrefix === 'TLB' ? 'selected' : ''}>TLB (Ordinario Burocrático / Efectos Nombramiento)</option>
+                                <option value="PE" ${selectedPrefix === 'PE' ? 'selected' : ''}>PE (Procedimiento Especial)</option>
+                                <option value="PA" ${selectedPrefix === 'PA' ? 'selected' : ''}>PA (Paraprocesal)</option>
+                                <option value="CONVENIO" ${selectedPrefix === 'CONVENIO' ? 'selected' : ''}>CONVENIO (Procedimiento Convenio)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">Consecutivo</label>
+                            <input type="number" id="exp_consecutivo" value="${selectedNum}" min="1" max="9999" placeholder="Ej. 104" class="w-full text-xs p-2 border border-slate-300 rounded-md font-mono" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">Año</label>
+                            <select id="exp_anio" class="w-full text-xs p-2 border border-slate-300 rounded-md font-mono bg-slate-50">
+                                ${years.map(y => `<option value="${y}" ${selectedYear == y ? 'selected' : ''}>${y}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                `;
+            },
+
+            renderParteActoraInputs: function() {
+                return `
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-700 mb-0.5">Nombre(s)</label>
+                            <input type="text" id="actor_nombre" oninput="app.searchAntecedentesActor()" class="w-full text-xs p-2 border border-slate-300 rounded" placeholder="Ej. Juan Carlos" required>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-700 mb-0.5">Apellido Paterno</label>
+                            <input type="text" id="actor_paterno" oninput="app.searchAntecedentesActor()" class="w-full text-xs p-2 border border-slate-300 rounded" placeholder="Ej. Pérez" required>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-700 mb-0.5">Apellido Materno</label>
+                            <input type="text" id="actor_materno" oninput="app.searchAntecedentesActor()" class="w-full text-xs p-2 border border-slate-300 rounded" placeholder="Ej. López">
+                        </div>
+                    </div>
+                    <div id="antecedentes_results" class="hidden mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-xs"></div>
+                `;
+            },
+
+            searchAntecedentesActor: function() {
+                const nom = document.getElementById('actor_nombre')?.value.toLowerCase().trim() || '';
+                const pat = document.getElementById('actor_paterno')?.value.toLowerCase().trim() || '';
+                const mat = document.getElementById('actor_materno')?.value.toLowerCase().trim() || '';
+
+                const container = document.getElementById('antecedentes_results');
+                if (!container) return;
+
+                const fullSearch = `${nom} ${pat} ${mat}`.trim();
+                if (fullSearch.length < 3) {
+                    container.classList.add('hidden');
+                    return;
+                }
+
+                const coincidencia = this.expedientes.filter(e => e.actor.toLowerCase().includes(fullSearch));
+
+                if (coincidencia.length > 0) {
+                    container.classList.remove('hidden');
+                    container.innerHTML = `
+                        <p class="font-bold text-amber-900 mb-1 flex items-center gap-1">
+                            <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i> Coincidencia de Antecedentes (${coincidencia.length}):
+                        </p>
+                        <div class="space-y-1">
+                            ${coincidencia.map(c => `
+                                <div class="flex justify-between items-center bg-white p-1.5 rounded border border-amber-300 text-[11px]">
+                                    <span><strong>${c.numero}</strong> - ${c.actor} (${c.juicio})</span>
+                                    <button type="button" onclick="document.getElementById('exp_vinculado').value='${c.numero}'; showAlert('Vinculado con ${c.numero}', 'info');" class="px-2 py-0.5 bg-amber-700 text-white rounded text-[10px] font-bold">Vincular</button>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                    if (window.lucide) lucide.createIcons();
+                } else {
+                    container.classList.add('hidden');
+                }
+            },
+
+            renderNewExpedienteModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-2xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="plus-circle" class="w-5 h-5 text-slate-800"></i>
+                                Registro de Nuevo Expediente
+                            </h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <form onsubmit="app.handleNewExpedienteSubmit(event)" class="space-y-4">
+                            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                <label class="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">1. Identificación del Expediente (Prefijo y Consecutivo)</label>
+                                ${this.renderCasePrefixSelector('TLB', '', new Date().getFullYear())}
+                            </div>
+
+                            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                                <label class="block text-xs font-bold text-slate-800 uppercase tracking-wider">2. Datos de la Parte Actora y Antecedentes</label>
+                                ${this.renderParteActoraInputs()}
+                                
+                                <div class="pt-2">
+                                    <label class="block text-[11px] text-slate-600 mb-0.5">Expediente Antecedente Vinculado (Opcional)</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="exp_vinculado" class="w-full text-xs p-2 border border-slate-300 rounded font-mono bg-white" placeholder="Ej. TLB/050/2024">
+                                        <label class="flex items-center gap-1 text-[11px] text-rose-700 whitespace-nowrap cursor-pointer">
+                                            <input type="checkbox" id="chk_desvincular" class="rounded text-rose-600">
+                                            <span>Desvincular</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-800 mb-1">Parte Demandada / Autoridad</label>
+                                    <input type="text" id="exp_demandado" class="w-full text-xs p-2 border border-slate-300 rounded" placeholder="Ej. Secretaría de Finanzas del Estado" required>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-800 mb-1">Tipo de Juicio / Vía</label>
+                                    <select id="exp_juicio_tipo" class="w-full text-xs p-2 border border-slate-300 rounded bg-white font-medium">
+                                        <option value="Ordinario Burocrático">Ordinario Burocrático (TLB)</option>
+                                        <option value="Procedimiento Especial">Procedimiento Especial (PE)</option>
+                                        <option value="Paraprocesal">Paraprocesal (PA)</option>
+                                        <option value="Convenio Conciliatorio">Convenio Conciliatorio (CONVENIO)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-800 mb-1">Tarea / Etapa Inicial</label>
+                                    <input type="text" id="exp_tarea" value="Recibido en Turno de Inicio" class="w-full text-xs p-2 border border-slate-300 rounded" required>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-800 mb-1">Mesa / Encargado Inicial</label>
+                                    <select id="exp_encargado" class="w-full text-xs p-2 border border-slate-300 rounded bg-white">
+                                        <option value="Mesa de Entrada / Oficialía de Partes">Mesa de Entrada / Oficialía de Partes</option>
+                                        <option value="Secretaría de Acuerdos de Inicio">Secretaría de Acuerdos de Inicio</option>
+                                        <option value="Secretaría de Acuerdos de Trámite / Ejecución">Secretaría de Acuerdos de Trámite / Ejecución</option>
+                                        <option value="Secretaría Proyectista / Estudio y Cuenta">Secretaría Proyectista / Estudio y Cuenta</option>
+                                        <option value="Actuaría / Notificaciones">Actuaría / Notificaciones</option>
+                                        <option value="Mesa de Conciliación y Convenios">Mesa de Conciliación y Convenios</option>
+                                        <option value="Mesa de Amparo Directo">Mesa de Amparo Directo</option>
+                                        <option value="Mesa de Amparo Indirecto">Mesa de Amparo Indirecto</option>
+                                        <option value="Archivo y Resguardo Procesal">Archivo y Resguardo Procesal</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="flex justify-end gap-2 pt-2 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded">Cancelar</button>
+                                <button type="submit" class="px-4 py-2 text-xs font-semibold bg-slate-800 text-white rounded hover:bg-slate-700 shadow flex items-center gap-1.5">
+                                    <i data-lucide="check" class="w-4 h-4"></i> Guardar y Registrar Expediente
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleNewExpedienteSubmit: function(e) {
+                e.preventDefault();
+                const prefix = document.getElementById('exp_prefix').value;
+                const consecutivo = document.getElementById('exp_consecutivo').value.trim();
+                const anio = document.getElementById('exp_anio').value;
+
+                const fullNumber = `${prefix}/${consecutivo.padStart(3, '0')}/${anio}`;
+
+                if (this.expedientes.some(exp => exp.numero === fullNumber)) {
+                    showAlert(`El número de expediente ${fullNumber} ya se encuentra registrado.`, 'danger');
+                    return;
+                }
+
+                const actorNombre = document.getElementById('actor_nombre').value.trim();
+                const actorPaterno = document.getElementById('actor_paterno').value.trim();
+                const actorMaterno = document.getElementById('actor_materno').value.trim();
+                const fullActor = `${actorNombre} ${actorPaterno} ${actorMaterno}`.trim();
+
+                const demandado = document.getElementById('exp_demandado').value.trim();
+                const juicio = document.getElementById('exp_juicio_tipo').value;
+                const tarea = document.getElementById('exp_tarea').value.trim();
+                const encargado = document.getElementById('exp_encargado').value;
+
+                let vinculado = document.getElementById('exp_vinculado').value.trim();
+                const desvincular = document.getElementById('chk_desvincular').checked;
+                if (desvincular) vinculado = '';
+
+                const nowStr = new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX');
+
+                const newExp = {
+                    id: 'exp-' + Date.now().toString(36),
+                    prefix,
+                    consecutivo,
+                    anio,
+                    numero: fullNumber,
+                    actorNombre,
+                    actorPaterno,
+                    actorMaterno,
+                    actor: fullActor,
+                    demandado,
+                    juicio,
+                    tarea,
+                    encargado,
+                    fechaRegistro: nowStr,
+                    expedienteVinculado: vinculado,
+                    historial: [{
+                        fecha: nowStr,
+                        usuario: this.currentUser ? this.currentUser.name : 'Admin',
+                        area: encargado,
+                        accion: `Registro inicial del expediente`
+                    }]
+                };
+
+                this.expedientes.unshift(newExp);
+                localStorage.setItem('tb_expedientes', JSON.stringify(this.expedientes));
+
+                if (window.firebaseDb && window.firestoreCollections) {
+                    import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ setDoc }) => {
+                        const docRef = window.firestoreCollections.publicDoc('expedientes', newExp.id);
+                        setDoc(docRef, newExp).catch(err => console.warn("Firestore save fallback:", err));
+                    });
+                }
+
+                this.logAudit('Registro Expediente', `Alta de ${fullNumber}`);
+                showAlert(`Expediente ${fullNumber} registrado exitosamente.`, 'success');
+                closeModal();
+                this.renderDashboard();
+            },
+
+            renderExpedientesView: function() {
+                const effectiveRole = (this.currentUser.role === 'Admin' && this.currentUser.activeSimulatedRole) 
+                    ? this.currentUser.activeSimulatedRole 
+                    : this.currentUser.role;
+
+                const isJuez = effectiveRole.includes('Juez') || effectiveRole === 'Administrador General';
+
+                return `
+                    <div class="space-y-4">
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                            <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                                <div class="relative flex-1 sm:w-64">
+                                    <i data-lucide="search" class="w-4 h-4 absolute left-3 top-2.5 text-slate-400"></i>
+                                    <input type="text" id="exp_search" oninput="app.filterExpedientesTable()" class="w-full text-xs pl-9 pr-3 py-2 border border-slate-300 rounded-lg" placeholder="Buscar expediente, actor...">
+                                </div>
+                                <select id="filter_encargado" onchange="app.filterExpedientesTable()" class="text-xs p-2 border border-slate-300 rounded-lg bg-white">
+                                    <option value="">Todas las Áreas</option>
+                                    <option value="Mesa de Entrada / Oficialía de Partes">Oficialía de Partes</option>
+                                    <option value="Secretaría de Acuerdos de Inicio">Secretaría de Acuerdos de Inicio</option>
+                                    <option value="Secretaría de Acuerdos de Trámite / Ejecución">Secretaría de Acuerdos de Trámite</option>
+                                    <option value="Secretaría Proyectista / Estudio y Cuenta">Secretaría Proyectista</option>
+                                    <option value="Actuaría / Notificaciones">Actuaría / Notificaciones</option>
+                                    <option value="Mesa de Conciliación y Convenios">Mesa de Conciliación y Convenios</option>
+                                    <option value="Mesa de Amparo Directo">Mesa de Amparo Directo</option>
+                                    <option value="Mesa de Amparo Indirecto">Mesa de Amparo Indirecto</option>
+                                    <option value="Archivo y Resguardo Procesal">Archivo Procesal</option>
+                                </select>
+                            </div>
+
+                            <div class="flex items-center gap-2">
+                                <button onclick="app.renderNewExpedienteModal()" class="px-3 py-2 text-xs font-semibold bg-slate-800 text-white rounded-lg hover:bg-slate-700 flex items-center gap-1.5 shadow">
+                                    <i data-lucide="plus" class="w-4 h-4"></i> Nuevo Expediente
+                                </button>
+                                <button onclick="app.renderCargaMasivaModal()" class="px-3 py-2 text-xs font-semibold bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 flex items-center gap-1.5 shadow">
+                                    <i data-lucide="upload" class="w-4 h-4"></i> Carga Masiva (CSV / Excel)
+                                </button>
+                                <button onclick="app.exportToCSV()" class="px-3 py-2 text-xs font-semibold bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 flex items-center gap-1.5 shadow">
+                                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Exportar CSV
+                                </button>
+                            </div>
+                        </div>
+
+                        ${isJuez ? `
+                            <div class="p-3 bg-indigo-900 text-indigo-100 rounded-xl border border-indigo-700 text-xs flex items-center justify-between">
+                                <span class="font-bold flex items-center gap-1.5"><i data-lucide="eye" class="w-4 h-4"></i> Vista de Control (Área: ${effectiveRole})</span>
+                                <span class="font-mono bg-indigo-800 px-2.5 py-1 rounded border border-indigo-600 font-bold">${this.expedientes.length} Expedientes en Registro</span>
+                            </div>
+                        ` : ''}
+
+                        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse text-xs min-w-[700px]">
+                                    <thead>
+                                        <tr class="bg-slate-100 border-b border-slate-200 text-slate-700 font-semibold uppercase text-[11px]">
+                                            <th class="p-3">Número Exp.</th>
+                                            <th class="p-3">Parte Actora</th>
+                                            <th class="p-3">Demandado</th>
+                                            <th class="p-3">Juicio</th>
+                                            <th class="p-3">Área Actual</th>
+                                            <th class="p-3">Etapa / Tarea</th>
+                                            <th class="p-3 text-right">Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="expedientes_tbody" class="divide-y divide-slate-200">
+                                        <!-- Table content loaded via filterExpedientesTable -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            filterExpedientesTable: function() {
+                const tbody = document.getElementById('expedientes_tbody');
+                if (!tbody) return;
+
+                const q = document.getElementById('exp_search')?.value.toLowerCase().trim() || '';
+                const area = document.getElementById('filter_encargado')?.value || '';
+
+                // Filter matching query & area
+                const filtered = this.expedientes.filter(e => {
+                    const matchQ = !q || e.numero.toLowerCase().includes(q) || e.actor.toLowerCase().includes(q) || e.demandado.toLowerCase().includes(q);
+                    const matchArea = !area || e.encargado === area;
+                    return matchQ && matchArea;
+                });
+
+                // Sort: 1. Year descending (most recent first), 2. Consecutivo descending
+                filtered.sort((a, b) => {
+                    const yearA = parseInt(a.anio || (a.numero.split('/')[2] || '0'), 10);
+                    const yearB = parseInt(b.anio || (b.numero.split('/')[2] || '0'), 10);
+
+                    if (yearB !== yearA) {
+                        return yearB - yearA; // Most recent year first
+                    }
+
+                    const numA = parseInt(a.consecutivo || (a.numero.split('/')[1] || '0'), 10);
+                    const numB = parseInt(b.consecutivo || (b.numero.split('/')[1] || '0'), 10);
+
+                    return numB - numA; // Higher consecutivo first within same year
+                });
+
+                if (filtered.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" class="p-8 text-center text-slate-400">No se encontraron expedientes.</td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = filtered.map(e => `
+                    <tr class="hover:bg-slate-50 transition-colors">
+                        <td class="p-3 font-mono font-bold text-slate-900">${e.numero}</td>
+                        <td class="p-3 font-semibold text-slate-800">${e.actor}</td>
+                        <td class="p-3 text-slate-600">${e.demandado}</td>
+                        <td class="p-3 font-medium text-slate-700">${e.juicio}</td>
+                        <td class="p-3"><span class="px-2 py-1 rounded bg-slate-100 border text-slate-700 font-semibold">${e.encargado}</span></td>
+                        <td class="p-3 text-slate-600">${e.tarea}</td>
+                        <td class="p-3 text-right">
+                            <button onclick="app.renderTurnoModal('${e.id}')" class="px-2.5 py-1 bg-slate-800 text-white rounded text-xs hover:bg-slate-700 font-medium">
+                                Turnar / Custodia
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+                if (window.lucide) lucide.createIcons();
+            },
+
+            renderTurnoModal: function(expId) {
+                const exp = this.expedientes.find(e => e.id === expId);
+                if (!exp) return;
+
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-lg w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base sm:text-lg font-serif font-bold text-slate-900">Cambio de Custodia Procesal</h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="p-3 bg-amber-50 border border-amber-200 rounded text-xs space-y-2">
+                            <p class="font-bold text-amber-900">Verificación Física Obligatoria:</p>
+                            <label class="flex items-center gap-2 cursor-pointer text-slate-800">
+                                <input type="checkbox" id="chk_presencia" class="rounded text-amber-700">
+                                <span>Expediente físico verificado a la vista</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer text-slate-800">
+                                <input type="checkbox" id="chk_folios" class="rounded text-amber-700">
+                                <span>Folios y cosido completo</span>
+                            </label>
+                        </div>
+
+                        <div class="space-y-3 text-xs">
+                            <div>
+                                <label class="block font-semibold mb-1">Nueva Área / Responsable</label>
+                                <select id="turno_area" class="w-full p-2 border border-slate-300 rounded bg-white">
+                                    <option value="Mesa de Entrada / Oficialía de Partes">Mesa de Entrada / Oficialía de Partes</option>
+                                    <option value="Secretaría de Acuerdos de Inicio">Secretaría de Acuerdos de Inicio</option>
+                                    <option value="Secretaría de Acuerdos de Trámite / Ejecución">Secretaría de Acuerdos de Trámite / Ejecución</option>
+                                    <option value="Actuaría / Notificaciones">Actuaría / Notificaciones</option>
+                                    <option value="Secretaría Proyectista / Estudio y Cuenta">Secretaría Proyectista / Estudio y Cuenta</option>
+                                    <option value="Mesa de Conciliación y Convenios">Mesa de Conciliación y Convenios</option>
+                                    <option value="Mesa de Amparo Directo">Mesa de Amparo Directo</option>
+                                    <option value="Mesa de Amparo Indirecto">Mesa de Amparo Indirecto</option>
+                                    <option value="Archivo y Resguardo Procesal">Archivo y Resguardo Procesal</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block font-semibold mb-1">Etapa / Tarea Asignada</label>
+                                <input type="text" id="turno_tarea" value="${exp.tarea}" class="w-full p-2 border border-slate-300 rounded">
+                            </div>
+
+                            <div class="flex justify-end gap-2 pt-3 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-slate-600">Cancelar</button>
+                                <button type="button" onclick="app.executeTurnoExpediente('${exp.id}')" class="px-4 py-2 bg-slate-800 text-white rounded font-bold">Confirmar Recepción</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            executeTurnoExpediente: function(expId) {
+                const chk1 = document.getElementById('chk_presencia')?.checked;
+                const chk2 = document.getElementById('chk_folios')?.checked;
+
+                if (!chk1 || !chk2) {
+                    showAlert('Debe confirmar las casillas de verificación física.', 'warning');
+                    return;
+                }
+
+                const exp = this.expedientes.find(e => e.id === expId);
+                if (!exp) return;
+
+                const nuevaArea = document.getElementById('turno_area').value;
+                const nuevaTarea = document.getElementById('turno_tarea').value.trim();
+                const nowStr = new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX');
+
+                exp.encargado = nuevaArea;
+                exp.tarea = nuevaTarea;
+
+                const nuevoReporte = {
+                    id: 'rep-' + Date.now().toString(36),
+                    fecha: nowStr,
+                    expediente: exp.numero,
+                    entregadoPor: this.currentUser.name,
+                    recibidoPor: nuevaArea,
+                    estadoFisico: 'Verificado Físicamente'
+                };
+
+                this.reportesEntrega.unshift(nuevoReporte);
+
+                localStorage.setItem('tb_reportes_entrega', JSON.stringify(this.reportesEntrega));
+                localStorage.setItem('tb_expedientes', JSON.stringify(this.expedientes));
+
+                // Sync Expediente and Delivery Report online via Firestore
+                if (window.firebaseDb && window.firestoreCollections) {
+                    import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ setDoc, updateDoc }) => {
+                        const expDocRef = window.firestoreCollections.publicDoc('expedientes', exp.id);
+                        const repDocRef = window.firestoreCollections.publicDoc('reportes_entrega', nuevoReporte.id);
+                        
+                        setDoc(expDocRef, exp, { merge: true }).catch(err => console.warn("Firestore exp update fallback:", err));
+                        setDoc(repDocRef, nuevoReporte).catch(err => console.warn("Firestore report save fallback:", err));
+                    });
+                }
+
+                this.logAudit('Custodia', `${exp.numero} asignado a ${nuevaArea}`);
+
+                showAlert('Custodia actualizada correctamente en la nube.', 'success');
+                closeModal();
+                this.renderDashboard();
+            },
+
+            renderReportesEntregaView: function() {
+                return `
+                    <div class="space-y-4">
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <h2 class="text-lg font-serif font-bold text-slate-900">Actas de Entrega y Recepción de Expedientes</h2>
+                        </div>
+                        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                            <table class="w-full text-left text-xs">
+                                <thead>
+                                    <tr class="bg-slate-100 font-bold border-b">
+                                        <th class="p-3">Folio</th>
+                                        <th class="p-3">Expediente</th>
+                                        <th class="p-3">Fecha</th>
+                                        <th class="p-3">Remitente</th>
+                                        <th class="p-3">Área Destino</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    ${this.reportesEntrega.map(r => `
+                                        <tr>
+                                            <td class="p-3 font-mono font-bold">${r.id}</td>
+                                            <td class="p-3 font-mono font-bold">${r.expediente}</td>
+                                            <td class="p-3 text-slate-600">${r.fecha}</td>
+                                            <td class="p-3">${r.entregadoPor}</td>
+                                            <td class="p-3 font-medium text-slate-800">${r.recibidoPor}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            },
+
+            renderAudienciasView: function() {
+                return `
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                        <h2 class="text-lg font-serif font-bold text-slate-900">Agenda de Audiencias Diferidas</h2>
+                        <p class="text-xs text-slate-500">Muestreo general de sesiones agendadas por la Ponencia Tres.</p>
+                    </div>
+                `;
+            },
+
+            renderProyectosView: function() {
+                return `
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                        <h2 class="text-lg font-serif font-bold text-slate-900">Revisión de Proyectos de Sentencia</h2>
+                        <p class="text-xs text-slate-500">Panel para la validación y devolución de proyectos por parte del Juez.</p>
+                    </div>
+                `;
+            },
+
+            renderAmparoView: function() {
+                return `
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                        <h2 class="text-lg font-serif font-bold text-slate-900">Control de Amparos Directos e Indirectos</h2>
+                        <p class="text-xs text-slate-500">Seguimiento a requerimientos de Tribunales Colegiados y Jueces de Distrito.</p>
+                    </div>
+                `;
+            },
+
+            renderAdminPanel: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base font-serif font-bold text-slate-900">Administración de Usuarios</h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <div class="space-y-2 text-xs">
+                            ${this.users.map(u => `
+                                <div class="p-2 border rounded flex justify-between items-center bg-slate-50">
+                                    <div>
+                                        <p class="font-bold">${u.name} (@${u.username})</p>
+                                        <p class="text-slate-500">${u.role}</p>
+                                    </div>
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-bold ${u.status === 'aprobado' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">${u.status}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            renderAuditLogModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-2xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base font-serif font-bold text-slate-900">Bitácora de Eventos y Auditoría</h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <div class="max-h-80 overflow-y-auto space-y-2 text-xs">
+                            ${this.auditLogs.map(l => `
+                                <div class="p-2 border-b">
+                                    <span class="font-mono text-slate-500">${l.fecha}</span> - <strong>${l.usuario}</strong>: ${l.detalles}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            renderCargaMasivaModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-3xl w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <div class="flex items-center gap-2">
+                                <div class="p-2 bg-indigo-100 text-indigo-700 rounded-lg">
+                                    <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-base font-serif font-bold text-slate-900">Carga Masiva de Expedientes (Excel / CSV)</h3>
+                                    <p class="text-[11px] text-slate-500">Importe múltiples expedientes a la Ponencia Tres desde una hoja de cálculo.</p>
+                                </div>
+                            </div>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+
+                        <div class="p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-xs space-y-2">
+                            <div class="flex justify-between items-center">
+                                <span class="font-bold text-indigo-900 flex items-center gap-1.5">
+                                    <i data-lucide="info" class="w-4 h-4"></i> Formato de Columnas Requerido en Excel:
+                                </span>
+                                <button type="button" onclick="app.downloadCSVTemplate()" class="px-2.5 py-1 bg-indigo-700 hover:bg-indigo-800 text-white font-semibold rounded text-[11px] flex items-center gap-1 shadow">
+                                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Descargar Plantilla CSV
+                                </button>
+                            </div>
+                            <p class="text-indigo-800 text-[11px]">
+                                El archivo debe contener exactamente el siguiente orden de celdas por fila:<br>
+                                <code class="bg-white px-1.5 py-0.5 rounded border border-indigo-300 font-mono text-indigo-950">Prefijo, Consecutivo, Año, Nombre, ApellidoPaterno, ApellidoMaterno, Demandado, Juicio, AreaInicial, Tarea</code>
+                            </p>
+                        </div>
+
+                        <div class="space-y-3 text-xs">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block font-bold text-slate-700 mb-1">Opción A: Seleccionar Archivo CSV / TXT</label>
+                                    <input type="file" id="bulk_file_input" accept=".csv, .txt" onchange="app.handleFileSelect(event)" class="w-full text-xs p-1.5 border border-slate-300 rounded bg-slate-50">
+                                </div>
+                                <div>
+                                    <label class="block font-bold text-slate-700 mb-1">Opción B: Pegar Celdas Copiadas de Excel</label>
+                                    <span class="text-[10px] text-slate-500 block mb-1">Seleccione las celdas en Excel y péguelas directamente abajo:</span>
+                                </div>
+                            </div>
+
+                            <textarea id="bulk_csv_input" rows="5" oninput="app.previewBulkImport()" class="w-full p-2.5 border border-slate-300 rounded-lg font-mono text-[11px] bg-slate-900 text-emerald-400 focus:ring-2 focus:ring-indigo-500" placeholder="Ejemplo:
+TLB,101,2026,María,Gómez,Pérez,Secretaría de Educación,Ordinario Burocrático,Secretaría de Acuerdos de Inicio,Prevención de Demanda
+PE,015,2026,Carlos,Juárez,Ríos,Municipio de Gómez Palacio,Procedimiento Especial,Secretaría de Acuerdos de Trámite / Ejecución,Declaración de Beneficiarios"></textarea>
+
+                            <!-- Preview Table Container -->
+                            <div id="bulk_preview_container" class="hidden space-y-2 border-t pt-3">
+                                <div class="flex justify-between items-center">
+                                    <span id="bulk_count_badge" class="font-bold text-slate-800">Vista Previa de Expedientes:</span>
+                                </div>
+                                <div class="max-h-40 overflow-y-auto border rounded-lg bg-slate-50">
+                                    <table class="w-full text-left text-[11px]">
+                                        <thead class="bg-slate-200 sticky top-0 font-bold text-slate-700">
+                                            <tr>
+                                                <th class="p-1.5">Expediente</th>
+                                                <th class="p-1.5">Actor</th>
+                                                <th class="p-1.5">Demandado</th>
+                                                <th class="p-1.5">Vía</th>
+                                                <th class="p-1.5">Área Destino</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="bulk_preview_tbody" class="divide-y divide-slate-200"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class="flex justify-end gap-2 pt-3 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded">Cancelar</button>
+                                <button type="button" id="btn_process_bulk" onclick="app.processBulkImport()" class="px-4 py-2 bg-indigo-700 hover:bg-indigo-800 text-white rounded font-bold shadow flex items-center gap-1.5">
+                                    <i data-lucide="check-check" class="w-4 h-4"></i> Confirmar e Importar Expedientes
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            downloadCSVTemplate: function() {
+                const header = "Prefijo,Consecutivo,Año,Nombre,ApellidoPaterno,ApellidoMaterno,Demandado,Juicio,AreaInicial,Tarea\n";
+                const row1 = "TLB,050,2026,Juan,Pérez,López,Secretaría de Finanzas,Ordinario Burocrático,Secretaría de Acuerdos de Inicio,Prevención de demanda\n";
+                const row2 = "PE,012,2026,Rosa,Martínez,Soto,Municipio de Durango,Procedimiento Especial,Secretaría de Acuerdos de Trámite / Ejecución,Auto de admisión\n";
+                const row3 = "CONVENIO,005,2026,José,Rodríguez,Mendoza,SICT,Convenio Conciliatorio,Mesa de Conciliación y Convenios,Ratificación de convenio\n";
+
+                const blob = new Blob([header + row1 + row2 + row3], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = "plantilla_carga_masiva_expedientes.csv";
+                a.click();
+            },
+
+            handleFileSelect: function(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const text = e.target.result;
+                    document.getElementById('bulk_csv_input').value = text;
+                    this.previewBulkImport();
+                };
+                reader.readAsText(file);
+            },
+
+            parseBulkRows: function() {
+                const raw = document.getElementById('bulk_csv_input')?.value.trim() || '';
+                if (!raw) return [];
+
+                const lines = raw.split('\n');
+                const parsed = [];
+
+                lines.forEach(line => {
+                    if (!line.trim() || line.startsWith('Prefijo,')) return;
+
+                    // Manejo básico de valores separados por comas o tabulaciones de Excel
+                    const separator = line.includes('\t') ? '\t' : ',';
+                    const parts = line.split(separator).map(p => p.trim().replace(/^"(.*)"$/, '$1'));
+
+                    if (parts.length >= 4) {
+                        const prefix = parts[0] || 'TLB';
+                        const consecutivo = (parts[1] || '001').padStart(3, '0');
+                        const anio = parts[2] || new Date().getFullYear();
+                        const num = `${prefix}/${consecutivo}/${anio}`;
+
+                        const nom = parts[3] || '';
+                        const pat = parts[4] || '';
+                        const mat = parts[5] || '';
+                        const actor = `${nom} ${pat} ${mat}`.trim() || parts[3];
+
+                        const demandado = parts[6] || parts[4] || 'Por Designar';
+                        const juicio = parts[7] || parts[5] || 'Ordinario Burocrático';
+                        const area = parts[8] || 'Secretaría de Acuerdos de Inicio';
+                        const tarea = parts[9] || 'Registro Inicial Masivo';
+
+                        parsed.push({
+                            prefix,
+                            consecutivo,
+                            anio,
+                            numero: num,
+                            actorNombre: nom,
+                            actorPaterno: pat,
+                            actorMaterno: mat,
+                            actor,
+                            demandado,
+                            juicio,
+                            encargado: area,
+                            tarea
+                        });
+                    }
+                });
+                return parsed;
+            },
+
+            previewBulkImport: function() {
+                const parsed = this.parseBulkRows();
+                const container = document.getElementById('bulk_preview_container');
+                const tbody = document.getElementById('bulk_preview_tbody');
+                const badge = document.getElementById('bulk_count_badge');
+
+                if (!container || !tbody) return;
+
+                if (parsed.length === 0) {
+                    container.classList.add('hidden');
+                    return;
+                }
+
+                container.classList.remove('hidden');
+                badge.innerText = `Vista Previa (${parsed.length} expedientes listos para procesar):`;
+
+                tbody.innerHTML = parsed.map(e => `
+                    <tr class="hover:bg-slate-100">
+                        <td class="p-1.5 font-mono font-bold text-slate-900">${e.numero}</td>
+                        <td class="p-1.5 font-medium">${e.actor}</td>
+                        <td class="p-1.5 text-slate-600">${e.demandado}</td>
+                        <td class="p-1.5 text-slate-700">${e.juicio}</td>
+                        <td class="p-1.5 font-semibold text-slate-800">${e.encargado}</td>
+                    </tr>
+                `).join('');
+            },
+
+            processBulkImport: function() {
+                const parsed = this.parseBulkRows();
+                if (parsed.length === 0) {
+                    showAlert('Ingrese o cargue al menos una fila con datos válidos.', 'warning');
+                    return;
+                }
+
+                let count = 0;
+                const nowStr = new Date().toLocaleDateString('es-MX') + ' ' + new Date().toLocaleTimeString('es-MX');
+
+                parsed.forEach(item => {
+                    if (!this.expedientes.some(e => e.numero === item.numero)) {
+                        const newExp = {
+                            id: 'exp-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+                            ...item,
+                            fechaRegistro: nowStr,
+                            historial: [{
+                                fecha: nowStr,
+                                usuario: this.currentUser ? this.currentUser.name : 'Admin',
+                                area: item.encargado,
+                                accion: 'Alta por Carga Masiva de Excel'
+                            }]
+                        };
+
+                        this.expedientes.unshift(newExp);
+
+                        if (window.firebaseDb && window.firestoreCollections) {
+                            import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ setDoc }) => {
+                                const docRef = window.firestoreCollections.publicDoc('expedientes', newExp.id);
+                                setDoc(docRef, newExp).catch(err => console.warn("Firestore save fallback:", err));
+                            });
+                        }
+                        count++;
+                    }
+                });
+
+                localStorage.setItem('tb_expedientes', JSON.stringify(this.expedientes));
+                this.logAudit('Carga Masiva', `Importación exitosa de ${count} expedientes.`);
+                showAlert(`Carga Masiva Exitosa: Se registraron ${count} nuevos expedientes.`, 'success');
+                closeModal();
+                this.renderDashboard();
+            },
+
+            exportToCSV: function() {
+                let csv = "Numero,Actor,Demandado,Juicio,Encargado,Tarea\n";
+                this.expedientes.forEach(e => {
+                    csv += `"${e.numero}","${e.actor}","${e.demandado}","${e.juicio}","${e.encargado}","${e.tarea}"\n`;
+                });
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `expedientes_ponencia3_${Date.now()}.csv`;
+                a.click();
+            },
+
+            renderRegisterModal: function() {
+                const content = `
+                    <div class="p-4 sm:p-6 space-y-4 max-w-md w-full">
+                        <div class="flex justify-between items-center border-b pb-3">
+                            <h3 class="text-base font-serif font-bold text-slate-900">Solicitar Registro de Usuario</h3>
+                            <button onclick="closeModal()"><i data-lucide="x" class="w-5 h-5 text-slate-400"></i></button>
+                        </div>
+                        <form onsubmit="app.handleRegisterSubmit(event)" class="space-y-3 text-xs">
+                            <div>
+                                <label class="block font-semibold mb-1">Nombre Completo</label>
+                                <input type="text" id="reg_name" class="w-full p-2 border rounded" required>
+                            </div>
+                            <div>
+                                <label class="block font-semibold mb-1">Nombre de Usuario</label>
+                                <input type="text" id="reg_user" class="w-full p-2 border rounded" required>
+                            </div>
+                            <div>
+                                <label class="block font-semibold mb-1">Contraseña</label>
+                                <input type="password" id="reg_pass" class="w-full p-2 border rounded" required>
+                            </div>
+                            <div>
+                                <label class="block font-semibold mb-1">Área / Rol</label>
+                                <select id="reg_role" class="w-full p-2 border rounded bg-white">
+                                    <option value="Secretaría de Acuerdos de Inicio">Secretaría de Acuerdos de Inicio</option>
+                                    <option value="Secretaría de Acuerdos de Trámite / Ejecución">Secretaría de Acuerdos de Trámite / Ejecución</option>
+                                    <option value="Actuaría / Notificaciones">Actuaría / Notificaciones</option>
+                                    <option value="Secretaría Proyectista / Estudio y Cuenta">Secretaría Proyectista / Estudio y Cuenta</option>
+                                </select>
+                            </div>
+                            <div class="flex justify-end gap-2 pt-3 border-t">
+                                <button type="button" onclick="closeModal()" class="px-3 py-1.5 text-slate-600">Cancelar</button>
+                                <button type="submit" class="px-4 py-2 bg-slate-800 text-white font-bold rounded">Enviar Solicitud</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                openModal(content);
+            },
+
+            handleRegisterSubmit: function(e) {
+                e.preventDefault();
+                const newUser = {
+                    id: 'usr-' + Date.now().toString(36),
+                    name: document.getElementById('reg_name').value.trim(),
+                    username: document.getElementById('reg_user').value.trim(),
+                    passwordHash: document.getElementById('reg_pass').value.trim(),
+                    role: document.getElementById('reg_role').value,
+                    status: 'pendiente'
+                };
+                this.users.push(newUser);
+                localStorage.setItem('tb_users', JSON.stringify(this.users));
+                showAlert('Solicitud enviada. Pendiente de aprobación por Admin.', 'info');
+                closeModal();
+            }
+        };
+
+        window.onload = function() {
+            app.init();
+        };
+    </script>
+</body>
+</html>
