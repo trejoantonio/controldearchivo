@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Meeting Assistant & Notetaker Online</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- docx Library for Word generation -->
+  <script src="https://unpkg.com/docx@8.2.2/build/index.umd.js"></script>
+
+  <!-- Firebase Integration (v11 Modular SDK) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, collection, addDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // Configuración real de Firebase
+    const firebaseConfig = typeof __firebase_config !== 'undefined' 
+      ? JSON.parse(__firebase_config) 
+      : {
+          apiKey: "AIzaSyBb8GWHEC-BsDKdxzCMmFyhhEYv7s9VDq0",
+          authDomain: "transcriptor-78feb.firebaseapp.com",
+          projectId: "transcriptor-78feb",
+          storageBucket: "transcriptor-78feb.firebasestorage.app",
+          messagingSenderId: "910024341955",
+          appId: "1:910024341955:web:a189bb6adb8f0d96f16576",
+          measurementId: "G-0N3H8W87RW"
+        };
+
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'meeting-notetaker-app';
+
+    // Inicializar Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+
+    let currentUser = null;
+
+    // Autenticación inicial
+    async function initAuth() {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Error en autenticación Firebase:", err);
+      }
+    }
+
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        currentUser = user;
+        console.log("Usuario autenticado en Firebase:", user.uid);
+        listenSavedMeetings();
+      }
+    });
+
+    initAuth();
+
+    // Guardar Reunión en Firebase Firestore
+    window.saveMeetingToFirebase = async function(transcript, summary) {
+      if (!currentUser) {
+        console.warn("Usuario no autenticado en Firebase.");
+        return;
+      }
+
+      try {
+        const meetingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'meetings');
+        await addDoc(meetingsRef, {
+          userId: currentUser.uid,
+          date: new Date().toISOString(),
+          transcript: transcript || "",
+          summary: summary || "",
+          timestamp: Date.now()
+        });
+        console.log("Reunión guardada exitosamente en Firebase Firestore");
+      } catch (err) {
+        console.error("Error guardando en Firestore:", err);
+      }
+    };
+
+    // Escuchar Historial de Reuniones Guardadas en Tiempo Real
+    function listenSavedMeetings() {
+      if (!currentUser) return;
+
+      const meetingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'meetings');
+      
+      onSnapshot(meetingsRef, (snapshot) => {
+        const historyContainer = document.getElementById('meetingHistoryList');
+        if (!historyContainer) return;
+
+        if (snapshot.empty) {
+          historyContainer.innerHTML = `<p class="text-xs text-slate-500 italic p-2">No hay reuniones guardadas en la nube.</p>`;
+          return;
+        }
+
+        historyContainer.innerHTML = '';
+        snapshot.docs.forEach(doc => {
+          const data = doc.data();
+          const dateStr = new Date(data.timestamp || Date.now()).toLocaleString();
+          
+          const card = document.createElement('div');
+          card.className = "p-3 bg-slate-900 border border-slate-800 rounded-lg text-xs hover:border-indigo-500 transition cursor-pointer mb-2";
+          card.innerHTML = `
+            <div class="flex justify-between items-center text-slate-400 mb-1">
+              <span class="font-semibold text-indigo-400"><i class="fa-regular fa-calendar-check mr-1"></i> ${dateStr}</span>
+            </div>
+            <p class="text-slate-300 line-clamp-2">${data.summary || data.transcript || "Sin contenido"}</p>
+          `;
+          card.onclick = () => {
+            document.getElementById('transcriptBox').innerText = data.transcript;
+            document.getElementById('keyPoints').innerHTML = (data.summary || "").replace(/\n/g, '<br>');
+          };
+          historyContainer.appendChild(card);
+        });
+      }, (err) => {
+        console.error("Error cargando historial de Firestore:", err);
+      });
+    }
+  </script>
+
+  <style>
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1f2937; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+    
+    .pulse-record {
+      animation: pulse-animation 1.5s infinite;
+    }
+    @keyframes pulse-animation {
+      0% { box-shadow: 0 0 0 0px rgba(239, 68, 68, 0.6); }
+      100% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans h-screen flex flex-col overflow-hidden select-none">
+
+  <!-- Header / Window Titlebar -->
+  <header class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center space-x-3">
+      <div class="bg-indigo-600 text-white p-2 rounded-lg flex items-center justify-center">
+        <i class="fa-solid fa-microphone-lines text-xl"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-lg leading-tight">AI Meeting Notetaker Online</h1>
+        <p class="text-xs text-slate-400">Toma de Notas Online + Firebase Cloud Sync</p>
+      </div>
+    </div>
+
+    <!-- Status Badge -->
+    <div id="statusBadge" class="flex items-center space-x-2 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium">
+      <span class="w-2.5 h-2.5 rounded-full bg-slate-500" id="statusDot"></span>
+      <span id="statusText">Listo para empezar</span>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 flex overflow-hidden">
+    
+    <!-- Left Sidebar: Controls & Audio Sources -->
+    <aside class="w-80 bg-slate-900/50 border-r border-slate-800 p-5 flex flex-col justify-between space-y-4 overflow-y-auto">
+      
+      <div class="space-y-5">
+        <!-- Main Actions -->
+        <div class="space-y-3">
+          <button id="btnStart" class="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl shadow-lg shadow-indigo-600/25 transition flex items-center justify-center space-x-2 cursor-pointer">
+            <i class="fa-solid fa-play"></i>
+            <span>Iniciar Toma de Notas</span>
+          </button>
+          
+          <button id="btnStop" disabled class="w-full py-3.5 px-4 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-xl shadow-lg opacity-50 cursor-not-allowed transition flex items-center justify-center space-x-2">
+            <i class="fa-solid fa-square"></i>
+            <span>Detener y Guardar Reunión</span>
+          </button>
+        </div>
+
+        <!-- System + Mic Audio Capture Info -->
+        <div class="bg-indigo-950/50 border border-indigo-800/60 rounded-xl p-3 text-[11px] text-indigo-300 space-y-1">
+          <p class="font-bold flex items-center space-x-1 text-indigo-400">
+            <i class="fa-solid fa-users"></i>
+            <span>Captura Voz de Todos</span>
+          </p>
+          <p class="leading-relaxed">Al iniciar, selecciona la ventana o pestaña de la reunión y marca <b>"Compartir audio del sistema"</b> para escuchar a los demás interlocutores.</p>
+        </div>
+
+        <!-- Meeting Auto-Detection Settings -->
+        <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <label for="autoDetectToggle" class="text-xs font-semibold text-slate-300 flex items-center space-x-2">
+              <i class="fa-solid fa-wand-magic-sparkles text-indigo-400"></i>
+              <span>Detección Automática</span>
+            </label>
+            <input type="checkbox" id="autoDetectToggle" checked class="w-4 h-4 accent-indigo-600 rounded cursor-pointer">
+          </div>
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            Detiene y guarda la reunión automáticamente tras 15 segundos de silencio continuos (fin de la llamada).
+          </p>
+        </div>
+
+        <!-- Export Options -->
+        <div class="space-y-2">
+          <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Exportar Notas</h2>
+          <div class="grid grid-cols-2 gap-2">
+            <button id="btnExportTxt" class="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-medium transition flex items-center justify-center space-x-1.5 cursor-pointer">
+              <i class="fa-regular fa-file-lines text-slate-400"></i>
+              <span>TXT</span>
+            </button>
+            <button id="btnExportDocx" class="py-2.5 px-3 bg-blue-900/40 border border-blue-700/50 hover:bg-blue-800/50 text-blue-200 rounded-lg text-xs font-medium transition flex items-center justify-center space-x-1.5 cursor-pointer">
+              <i class="fa-regular fa-file-word text-blue-400"></i>
+              <span>DOCX</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Firebase History Panel -->
+        <div class="space-y-2 pt-2 border-t border-slate-800">
+          <h2 class="text-xs font-semibold text-indigo-400 uppercase tracking-wider flex items-center space-x-2">
+            <i class="fa-solid fa-cloud-arrow-up"></i>
+            <span>Historial en Firebase</span>
+          </h2>
+          <div id="meetingHistoryList" class="max-h-40 overflow-y-auto pr-1">
+            <p class="text-xs text-slate-500 italic p-2">Conectando a la nube...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Volume Meter Indicator -->
+      <div class="bg-slate-800/40 border border-slate-800 rounded-xl p-3">
+        <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
+          <span>Nivel de Audio</span>
+          <span id="dbValue" class="font-mono text-[10px]">0 dB</span>
+        </div>
+        <div class="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
+          <div id="audioProgressBar" class="bg-indigo-500 h-full w-0 transition-all duration-75"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Right Workspace: Transcription & AI Summary -->
+    <section class="flex-1 flex flex-col bg-slate-950 overflow-hidden">
+      
+      <!-- Tabs -->
+      <div class="flex border-b border-slate-800 bg-slate-900/30 px-6">
+        <button id="tabSummaryBtn" class="py-3 px-4 border-b-2 border-indigo-500 text-indigo-400 font-medium text-sm flex items-center space-x-2">
+          <i class="fa-solid fa-list-check"></i>
+          <span>Resumen de la Reunión</span>
+        </button>
+        <button id="tabTranscriptBtn" class="py-3 px-4 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center space-x-2">
+          <i class="fa-solid fa-quote-left"></i>
+          <span>Transcripción En Vivo</span>
+        </button>
+      </div>
+
+      <!-- Tab Content Area -->
+      <div class="flex-1 p-6 overflow-y-auto space-y-6">
+        
+        <!-- Summary View -->
+        <div id="summaryTabContent" class="space-y-6">
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-5">
+            <h3 class="text-xs uppercase tracking-wider text-indigo-400 font-bold mb-3 flex items-center space-x-2">
+              <i class="fa-solid fa-lightbulb"></i>
+              <span>Puntos Clave, Decisiones y Tareas</span>
+            </h3>
+            <div id="keyPoints" class="text-sm text-slate-300 space-y-2 leading-relaxed">
+              <p class="text-slate-500 italic">Haz clic en "Iniciar Toma de Notas" para comenzar...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Transcript View -->
+        <div id="transcriptTabContent" class="hidden space-y-4">
+          <div id="transcriptBox" class="bg-slate-900/90 border border-slate-800 rounded-xl p-5 text-sm text-slate-300 min-h-[300px] leading-relaxed font-mono whitespace-pre-wrap"></div>
+        </div>
+
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Application Logic -->
+  <script>
+    let isRecording = false;
+    let audioContext = null;
+    let analyser = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let transcriptText = "";
+    let summaryText = "";
+    let silenceTimer = null;
+    let lastAudioTime = Date.now();
+    let streamDestination = null;
+    const SILENCE_THRESHOLD_MS = 15000;
+
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const btnExportTxt = document.getElementById('btnExportTxt');
+    const btnExportDocx = document.getElementById('btnExportDocx');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const audioProgressBar = document.getElementById('audioProgressBar');
+    const dbValue = document.getElementById('dbValue');
+    const transcriptBox = document.getElementById('transcriptBox');
+    const keyPoints = document.getElementById('keyPoints');
+    const autoDetectToggle = document.getElementById('autoDetectToggle');
+
+    const tabSummaryBtn = document.getElementById('tabSummaryBtn');
+    const tabTranscriptBtn = document.getElementById('tabTranscriptBtn');
+    const summaryTabContent = document.getElementById('summaryTabContent');
+    const transcriptTabContent = document.getElementById('transcriptTabContent');
+
+    tabSummaryBtn.addEventListener('click', () => {
+      tabSummaryBtn.className = "py-3 px-4 border-b-2 border-indigo-500 text-indigo-400 font-medium text-sm flex items-center space-x-2";
+      tabTranscriptBtn.className = "py-3 px-4 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center space-x-2";
+      summaryTabContent.classList.remove('hidden');
+      transcriptTabContent.classList.add('hidden');
+    });
+
+    tabTranscriptBtn.addEventListener('click', () => {
+      tabTranscriptBtn.className = "py-3 px-4 border-b-2 border-indigo-500 text-indigo-400 font-medium text-sm flex items-center space-x-2";
+      tabSummaryBtn.className = "py-3 px-4 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center space-x-2";
+      transcriptTabContent.classList.remove('hidden');
+      summaryTabContent.classList.add('hidden');
+    });
+
+    btnStart.addEventListener('click', async () => {
+      try {
+        audioChunks = [];
+        transcriptText = "";
+        transcriptBox.innerText = "Escuchando conversación...";
+        keyPoints.innerHTML = `<p class="text-indigo-400 animate-pulse">Grabando audio de todos los participantes...</p>`;
+
+        // 1. Micrófono del usuario
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+
+        // 2. Audio de los demás (Sistema / Pestaña de la reunión)
+        let systemStream = null;
+        try {
+          systemStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false
+            }
+          });
+        } catch (e) {
+          console.warn("No se compartió el audio de la pantalla.");
+        }
+
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        streamDestination = audioContext.createMediaStreamDestination();
+
+        // Conectar voz del micrófono al mezclador
+        const micSource = audioContext.createMediaStreamSource(micStream);
+        micSource.connect(streamDestination);
+        micSource.connect(analyser);
+
+        // Conectar voz de los interlocutores al mezclador
+        if (systemStream && systemStream.getAudioTracks().length > 0) {
+          const systemSource = audioContext.createMediaStreamSource(systemStream);
+          systemSource.connect(streamDestination);
+          systemSource.connect(analyser);
+        }
+
+        analyser.fftSize = 256;
+        monitorAudioLevels();
+
+        // Grabar la mezcla digital de audio
+        mediaRecorder = new MediaRecorder(streamDestination.stream);
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        };
+        mediaRecorder.start(3000); // Guardar fragmentos cada 3 segundos
+
+        isRecording = true;
+        btnStart.disabled = true;
+        btnStart.classList.add('opacity-50', 'cursor-not-allowed');
+        btnStop.disabled = false;
+        btnStop.classList.remove('opacity-50', 'cursor-not-allowed');
+        btnStop.classList.add('pulse-record');
+
+        statusDot.className = "w-2.5 h-2.5 rounded-full bg-red-500 animate-ping";
+        statusText.innerText = "Grabando mezcla de voces (Tú + Interlocutores)...";
+        statusText.className = "text-red-400 font-semibold";
+
+        if (autoDetectToggle.checked) {
+          silenceTimer = setInterval(checkSilenceAndAutoStop, 2000);
+        }
+
+      } catch (err) {
+        alert("Error al iniciar la grabación: " + err.message);
+      }
+    });
+
+    btnStop.addEventListener('click', () => {
+      stopMeeting();
+    });
+
+    async function stopMeeting() {
+      if (!isRecording) return;
+
+      isRecording = false;
+      if (silenceTimer) clearInterval(silenceTimer);
+
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+
+      btnStart.disabled = false;
+      btnStart.classList.remove('opacity-50', 'cursor-not-allowed');
+      btnStop.disabled = true;
+      btnStop.classList.add('opacity-50', 'cursor-not-allowed');
+      btnStop.classList.remove('pulse-record');
+
+      statusDot.className = "w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse";
+      statusText.innerText = "Procesando audio de la reunión con Gemini IA...";
+      statusText.className = "text-amber-400 font-semibold";
+
+      audioProgressBar.style.width = '0%';
+      dbValue.innerText = "0 dB";
+
+      // Esperar a que se empaqute todo el blob de audio
+      setTimeout(async () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        await transcribeAndSummarizeAudioWithGemini(audioBlob);
+
+        if (audioContext) audioContext.close();
+
+        statusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500";
+        statusText.innerText = "Reunión guardada en Firebase";
+        statusText.className = "text-emerald-400 font-semibold";
+
+        if (window.saveMeetingToFirebase) {
+          await window.saveMeetingToFirebase(transcriptText, summaryText);
+        }
+      }, 1000);
+    }
+
+    function monitorAudioLevels() {
+      if (!isRecording) return;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(dataArray);
+
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+      }
+      const average = sum / dataArray.length;
+      const percentage = Math.min(100, Math.round((average / 128) * 100));
+
+      audioProgressBar.style.width = `${percentage}%`;
+      dbValue.innerText = `${Math.round(average)} dB`;
+
+      if (average > 8) {
+        lastAudioTime = Date.now();
+      }
+
+      requestAnimationFrame(monitorAudioLevels);
+    }
+
+    function checkSilenceAndAutoStop() {
+      if (!isRecording || !autoDetectToggle.checked) return;
+
+      const elapsedSilence = Date.now() - lastAudioTime;
+      if (elapsedSilence > SILENCE_THRESHOLD_MS && audioChunks.length > 2) {
+        stopMeeting();
+        alert("Reunión finalizada automáticamente por inactividad. Procesando notas...");
+      }
+    }
+
+    // Convertir Blob a Base64 para enviar a Gemini API
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64String = reader.result.split(',')[1];
+          resolve(base64String);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    async function transcribeAndSummarizeAudioWithGemini(audioBlob) {
+      keyPoints.innerHTML = `<p class="text-indigo-400 animate-pulse">Enviando audio completo (Micrófono + Altavoces) a Gemini IA para transcripción y minuta...</p>`;
+      transcriptBox.innerText = "Analizando mezcla de audio...";
+
+      try {
+        const base64Audio = await blobToBase64(audioBlob);
+        const apiKey = ""; 
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+        const promptText = `Analiza este archivo de audio de una reunión virtual donde hablan múltiples personas. 
+        Genera una respuesta estructurada con dos partes:
+        
+        PARTE 1: TRANSCRIPCIÓN DETALLADA (Identifica los cambios de hablante o interlocutores).
+        PARTE 2: RESUMEN EJECUTIVO (Puntos clave, decisiones tomadas y acuerdos o tareas).
+        
+        Separa ambas partes con el identificador ===RESUMEN===.`;
+
+        const payload = {
+          contents: [{
+            parts: [
+              { text: promptText },
+              {
+                inlineData: {
+                  mimeType: "audio/webm",
+                  data: base64Audio
+                }
+              }
+            ]
+          }]
+        };
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+        const fullOutput = result.candidates?.[0]?.content?.parts?.[0]?.text || "No se pudo procesar el audio de la reunión.";
+
+        if (fullOutput.includes("===RESUMEN===")) {
+          const parts = fullOutput.split("===RESUMEN===");
+          transcriptText = parts[0].trim();
+          summaryText = parts[1].trim();
+        } else {
+          transcriptText = fullOutput;
+          summaryText = fullOutput;
+        }
+
+        transcriptBox.innerText = transcriptText;
+        keyPoints.innerHTML = summaryText.replace(/\n/g, '<br>');
+
+      } catch (err) {
+        console.error("Error al procesar el audio con Gemini:", err);
+        keyPoints.innerHTML = `<p class="text-red-400">Error procesando audio: ${err.message}</p>`;
+      }
+    }
+
+    btnExportTxt.addEventListener('click', () => {
+      const content = `=== RESUMEN DE LA REUNIÓN ===\n\n${keyPoints.innerText}\n\n=== TRANSCRIPCIÓN COMPLETA ===\n\n${transcriptText}`;
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Notas_Reunion_${new Date().toISOString().slice(0,10)}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    btnExportDocx.addEventListener('click', () => {
+      if (typeof docx === 'undefined') {
+        alert("Librería de Word no disponible.");
+        return;
+      }
+
+      const { Document, Packer, Paragraph, HeadingLevel } = docx;
+
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: [
+            new Paragraph({ text: "Minuta de Reunión", heading: HeadingLevel.TITLE }),
+            new Paragraph({ text: `Fecha: ${new Date().toLocaleDateString()}`, spacing: { after: 200 } }),
+            new Paragraph({ text: "Resumen y Puntos Clave", heading: HeadingLevel.HEADING_1 }),
+            new Paragraph({ text: keyPoints.innerText, spacing: { after: 300 } }),
+            new Paragraph({ text: "Transcripción Completa", heading: HeadingLevel.HEADING_1 }),
+            new Paragraph({ text: transcriptText || "Sin transcripción." })
+          ]
+        }]
+      });
+
+      Packer.toBlob(doc).then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Minuta_Reunion_${new Date().toISOString().slice(0,10)}.docx`;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    });
+  </script>
+</body>
+</html>
